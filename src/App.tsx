@@ -8612,6 +8612,35 @@ export default function App() {
   if(!authUser){
     return <FirebaseLoginScreen onGoogle={iniciarSesionGoogle} error={loginError} busy={loginBusy} />;
   }
+  // Con sesión de Firebase, NO mostrar el CRM hasta recibir el primer estado
+  // de Firestore. Evita que la interfaz parezca vacía (0 registros) mientras
+  // los documentos fragmentados sec_* todavía están llegando de la nube.
+  if(authUser && !synced){
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4" style={{background:RP.navyDark}}>
+        <div className="text-center">
+          <div className="mx-auto mb-3 w-6 h-6 border-2 border-white/20 border-t-[#F4F4F1] rounded-full animate-spin" />
+          <div className="text-[#F4F4F1] font-bold text-sm">Cargando tus datos…</div>
+          <div className="text-[#717680] text-xs mt-1">Sincronizando ImpactOS con Firebase</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Si Firestore rechazó la sesión, no mostrar un CRM vacío como si no hubiera datos.
+  if(authUser && fbError && fbError.startsWith("⛔")){
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4" style={{background:RP.navyDark}}>
+        <div className="rounded-2xl p-7 shadow-2xl max-w-md w-full text-center" style={{background:RP.navy,border:`1px solid ${RP.silver2}`}}>
+          <div className="mb-3 flex justify-center"><Ico e="🔒" size={36} strokeWidth={1.25} className="opacity-40" /></div>
+          <div className="text-lg font-extrabold text-[#F4F4F1] mb-2">No se pudieron cargar los datos</div>
+          <div className="text-sm text-[#A5A9B0] mb-5">{fbError}</div>
+          <button onClick={reintentarFb} className="w-full px-4 py-3 rounded-xl text-sm font-bold" style={{background:RP.btn,color:RP.btnText}}>Reintentar conexión</button>
+        </div>
+      </div>
+    );
+  }
+
   // Correo autenticado pero no autorizado en esta app
   if(!emailOk){
     return (
