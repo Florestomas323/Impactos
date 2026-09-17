@@ -661,6 +661,11 @@ function useSharedState(authReady) {
     return initial;
   });
   const [synced,  setSynced]  = useState(false);
+  // ¿Tenemos YA datos utilizables (caché local o IndexedDB) para pintar el shell
+  // al instante? Así no bloqueamos la entrada esperando el primer snapshot de red.
+  const [hydrated, setHydrated] = useState(()=>{
+    try { return !!localStorage.getItem("crm_fb_v1"); } catch { return false; }
+  });
   const [fbError, setFbError] = useState("");
   const lastJsonDoc = useRef({});   // por documento: último JSON visto/escrito (corta ecos)
   const unsub       = useRef(null);
@@ -685,7 +690,7 @@ function useSharedState(authReady) {
   useEffect(()=>{
     let vivo = true;
     idbCache.get("estado").then(v => {
-      if(vivo && v && !primerSnapRef.current) setStateRaw(s => primerSnapRef.current ? s : v);
+      if(vivo && v && !primerSnapRef.current){ setStateRaw(s => primerSnapRef.current ? s : v); setHydrated(true); }
     });
     return () => { vivo = false; };
   },[]);
@@ -862,7 +867,7 @@ function useSharedState(authReady) {
     }).catch(()=>{});
   },[state, synced, primerSnap, connTick]); // connTick: al reconectar se re-empujan los pendientes
 
-  return [state, setStateRaw, synced, fbError, reintentarAhora];
+  return [state, setStateRaw, synced, fbError, reintentarAhora, hydrated];
 }
 
 // ─── UI PRIMITIVES ────────────────────────────────────────────
@@ -1728,7 +1733,7 @@ function ClientForm({ initial, onSave, onClose, type }) {
   );
 
   return (
-    <form onSubmit={e=>{e.preventDefault(); if(!(d.nombre||"").trim()){ alert("✍️ Escribe el nombre del cliente — no se guardan números sin nombre."); return; } if(soloDigitos(d.telefono).length<10){ alert("📞 Debes ingresar un número de teléfono válido (al menos 10 dígitos) para guardar este registro."); return; } onSave(d);}}>
+    <form onSubmit={e=>{e.preventDefault(); if(!(d.nombre||"").trim()){ alert("✍️ Escribe el nombre del cliente — no se guardan números sin nombre."); return; } if(soloDigitos(d.telefono).length<10){ alert("📞 Debes ingresar un número de tel��fono válido (al menos 10 dígitos) para guardar este registro."); return; } onSave(d);}}>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Nombre" required><input className={inpLight} value={d.nombre} onChange={e=>set("nombre",e.target.value)} /></Field>
         <Field label="Teléfono" required><input className={inpLight} value={d.telefono} onChange={e=>set("telefono",e.target.value)} /></Field>
@@ -5757,7 +5762,7 @@ function EntrevistaModal({ prospecto, agente, onSave, onClose }) {
   );
 }
 
-// ── Compresión de archivos para socios (imagen → JPEG ~100 KB; PDF ≤ 300 KB) ──
+// ── Compresión de archivos para socios (imagen → JPEG ~100 KB; PDF ≤ 300 KB) ─���
 const comprimirArchivoSocio = (file) => new Promise((resolve, reject) => {
   if(file.type === "application/pdf"){
     if(file.size > 300*1024) return reject(new Error("El PDF pesa más de 300 KB. Súbelo como foto o comprímelo primero."));
@@ -5816,7 +5821,7 @@ function SociosPanel({ socios, setSocios, docsSocios, setDocsSocios, agente }){
       try{
         const comp=await comprimirArchivoSocio(file);
         setDocsSocios(p=>({...(p||{}),[socioId]:{...((p||{})[socioId]||{}),[slot]:comp}}));
-      }catch(err){ alert("⚠️ "+(err.message||err)); }
+      }catch(err){ alert("⚠�� "+(err.message||err)); }
       setSubiendo("");
     };
     inp.click();
@@ -6228,7 +6233,7 @@ function ControlActividad({ allData, appts, reclutamiento, cierres, onGuardarCie
 }
 
 
-// ═══════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════���═════
 // COBRANZA — módulo integrado (clientes sincronizados con Distribución)
 // ═════════���═════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
@@ -7016,7 +7021,7 @@ function RachaProgreso({ inc, allData }) {
 }
 
 
-// ── HUB DE INCENTIVOS: Telemarketing (clásico) + Cobranza + Reclutamiento ──
+// ── HUB DE INCENTIVOS: Telemarketing (clásico) + Cobranza + Reclutamiento ─���
 function MetaBarInc({ pct }){
   return (
     <div className="h-2.5 rounded-full bg-[#eef1f5] overflow-hidden">
@@ -8278,7 +8283,7 @@ export default function App() {
 
   // El estado se carga para cualquier usuario autenticado en Firebase; la autorización
   // (fija o dinámica) se resuelve después, cuando ya tenemos state.cuentasCustom.
-  const [state,setState,synced,fbError,reintentarFb]=useSharedState(authReady && !!authUser);
+  const [state,setState,synced,fbError,reintentarFb,hydrated]=useSharedState(authReady && !!authUser);
   // Sincroniza el mapa dinámico ANTES de resolver el rol (corre en cada render, es barato)
   setCuentasDinamicas(state?.cuentasCustom||[]);
   setCumpleMsgTpl(state?.cumpleMsgTpl||"");
@@ -8633,10 +8638,11 @@ export default function App() {
   if(!authUser){
     return <FirebaseLoginScreen onGoogle={iniciarSesionGoogle} error={loginError} busy={loginBusy} />;
   }
-  // Con sesión de Firebase, NO mostrar el CRM hasta recibir el primer estado
-  // de Firestore. Evita que la interfaz parezca vacía (0 registros) mientras
-  // los documentos fragmentados sec_* todavía están llegando de la nube.
-  if(authUser && !synced){
+  // Con sesión de Firebase: si YA tenemos una copia local (IndexedDB/caché),
+  // pintamos el shell al instante con esos datos y dejamos que Firebase termine
+  // de sincronizar EN SEGUNDO PLANO (indicador discreto arriba). Solo bloqueamos
+  // la entrada en el PRIMER acceso real, cuando todavía no hay ningún dato local.
+  if(authUser && !synced && !hydrated){
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-[#F8FAFC]">
         <div className="text-center">
@@ -8774,6 +8780,7 @@ export default function App() {
         </header>
         <main className="flex-1 px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-7">
           <div className="w-full max-w-[1480px] mx-auto min-h-[70vh]">
+            {!synced && hydrated && <div className="mb-4 flex items-center gap-2 rounded-xl bg-[#EFF6FF] border border-[#BFDBFE] text-[#1D4ED8] px-3.5 py-2 text-xs font-semibold"><span className="w-3.5 h-3.5 border-2 border-[#BFDBFE] border-t-[#2563EB] rounded-full animate-spin shrink-0" />Sincronizando con la nube… mostrando tu última copia guardada.</div>}
             {importMsg && <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-700 font-bold flex items-center justify-between"><Msg>{importMsg}</Msg><button onClick={()=>setImportMsg("")} className="ml-2"><Ico e="✕" /></button></div>}
             {fbError && <div className="mb-4 flex items-start gap-2 bg-red-50 border-2 border-red-300 text-red-700 rounded-xl px-4 py-3 text-sm font-bold">
               <span className="shrink-0"><Ico e="🚨" /></span>
