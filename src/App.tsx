@@ -6236,7 +6236,7 @@ function ControlActividad({ allData, appts, reclutamiento, cierres, onGuardarCie
 // ═════════════════════════════════════════════════════════���═════
 // COBRANZA — módulo integrado (clientes sincronizados con Distribución)
 // ═════════���═════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════
+// ══════════════════════════════════���════════════════════════════
 // ── MÓDULO COBRANZA (encapsulado — sin dependencias externas) ──
 // ═══════════════════════════════════════════════════════════════
 // Cobranza modularizada en src/modules/collections/CobranzaSection.tsx
@@ -7011,7 +7011,7 @@ function RachaProgreso({ inc, allData }) {
             })()}
 
             <div className="text-center text-[11px] font-bold text-[#7c3aed] bg-[#f9f5ff] rounded-lg py-1.5 mt-2">
-              {r.vidaDisponible ? <><Ico e="🛡" className="mr-1" />Si fallas una semana, usas tu vida y sigues en racha</> : <><Ico e="⚠" className="mr-1" />Ya usaste tu vida — si fallas otra semana, la racha vuelve a 0</>}
+              {r.vidaDisponible ? <><Ico e="��" className="mr-1" />Si fallas una semana, usas tu vida y sigues en racha</> : <><Ico e="⚠" className="mr-1" />Ya usaste tu vida — si fallas otra semana, la racha vuelve a 0</>}
             </div>
           </>
         )}
@@ -7749,9 +7749,9 @@ function RutaCrear({ candidatos, agentes, agente, onSave, onClose }) {
 // Cada servicio puede marcarse: realizado / no realizado, y guardar nota.
 // El servicio SIEMPRE se ve rojo; solo el indicador "se realizó" se pone verde.
 const SERVICIO_ESTADO = {
-  pendiente:    { ico:"🔧", label:"Pendiente",     bg:"rgba(248,113,113,0.14)", color:"#FCA5A5", dot:"#ef4444" },
-  realizado:    { ico:"✅", label:"Se realizó",    bg:"rgba(74,222,128,0.14)",  color:"#6EE7B7", dot:"#16a34a" },
-  no_realizado: { ico:"❌", label:"No se realizó", bg:"rgba(248,113,113,0.14)", color:"#FCA5A5", dot:"#ef4444" },
+  pendiente:    { label:"Pendiente",     dot:"#F59E0B", badge:"bg-amber-50 text-amber-700 ring-1 ring-amber-200" },
+  realizado:    { label:"Se realizó",    dot:"#16A34A", badge:"bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200" },
+  no_realizado: { label:"No se realizó", dot:"#DC2626", badge:"bg-red-50 text-red-700 ring-1 ring-red-200" },
 };
 
 // ── CARTUCHOS Y FILTROS (dentro de Servicios): todos los cambios ordenados
@@ -7897,13 +7897,13 @@ function ServicioSection({ appts, setAppts, agente, notify, allData }) {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-2xl font-black text-[#5b21b6]" style={{fontFamily:SERIF}}><Ico e="🔧" className="mr-1.5" />Servicios</h2>
-        <p className="text-xs text-slate-400 mt-1">Servicios agendados, su resultado y notas. Conectados con el cliente.</p>
-        <div className="flex gap-1.5 mt-3">
+        <h2 className="text-2xl font-black tracking-[-0.02em] text-slate-950">Servicios</h2>
+        <p className="text-sm text-slate-500 mt-1">Servicios agendados, su resultado y notas. Conectados con el cliente.</p>
+        <div className="flex gap-2 mt-4">
           {[["servicios","🔧","Servicios"],["cartuchos","💧","Cartuchos y filtros"]].map(([id,ico,label])=>(
             <button key={id} onClick={()=>setVista(id)}
-              className={`flex-1 py-2 rounded-xl text-xs font-black transition ${vista===id?"text-white":"bg-white text-slate-500 border border-[#e8edf3]"}`}
-              style={vista===id?{background:RP.navy}:{}}><span className="inline-flex items-center justify-center gap-1.5"><Ico e={ico} size={13} />{label}</span></button>
+              className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition ${vista===id?"text-white shadow-sm":"bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"}`}
+              style={vista===id?{background:RP.navy}:{}}><span className="inline-flex items-center justify-center gap-1.5"><Ico e={ico} size={15} />{label}</span></button>
           ))}
         </div>
       </div>
@@ -7913,7 +7913,7 @@ function ServicioSection({ appts, setAppts, agente, notify, allData }) {
       ) : (<>
 
       {/* Filtros por estado */}
-      <div className="grid grid-cols-4 gap-1.5">
+      <div className="grid grid-cols-4 gap-2">
         {[
           {id:"todos",label:"Todos",n:conteos.todos},
           {id:"pendiente",ico:"⏳", label:"Pend.",n:conteos.pendiente},
@@ -7921,10 +7921,10 @@ function ServicioSection({ appts, setAppts, agente, notify, allData }) {
           {id:"no_realizado",ico:"❌", label:"No",n:conteos.no_realizado},
         ].map(t=>(
           <button key={t.id} onClick={()=>setFiltro(t.id)}
-            className={`px-1 py-2.5 rounded-xl text-[11px] font-bold transition flex flex-col items-center gap-0.5 ${filtro===t.id?"text-white":"text-slate-600 bg-[#f4f6f9]"}`}
+            className={`px-1 py-2.5 rounded-xl text-[11px] font-bold transition flex flex-col items-center gap-0.5 ${filtro===t.id?"text-white shadow-sm":"text-slate-600 bg-white border border-slate-200 hover:bg-slate-50"}`}
             style={filtro===t.id?{background:RP.navy}:{}}>
             <span>{t.label}</span>
-            <span className={`text-base font-black ${filtro===t.id?"text-white":"text-[#5b21b6]"}`} style={{fontFamily:SERIF}}>{t.n}</span>
+            <span className={`text-lg font-black ${filtro===t.id?"text-white":"text-slate-900"}`}>{t.n}</span>
           </button>
         ))}
       </div>
@@ -7946,82 +7946,90 @@ function ServicioSection({ appts, setAppts, agente, notify, allData }) {
             const esHoy=s.fecha&&(s.fecha||"").slice(0,10)===hoyISO;
             const abierto=expandido===s.id;
             return (
-              <div key={s.id} className="bg-white rounded-2xl shadow-sm border border-[#e8edf3] overflow-hidden">
-                <div className="px-4 py-3" style={{background:info.bg}}>
-                  <div className="flex items-center justify-between">
+              <div key={s.id} className="bg-white rounded-2xl border border-slate-200 shadow-[0_1px_2px_rgba(15,23,42,0.04)] overflow-hidden">
+                {/* Resumen compacto — toca para expandir */}
+                <button onClick={()=>setExpandido(abierto?null:s.id)}
+                  className="w-full min-h-[56px] px-4 py-3.5 flex items-center gap-3 text-left hover:bg-slate-50 transition">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{background:info.dot}} />
+                  <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full" style={{background:info.dot}} />
-                      <span className="font-black text-sm" style={{color:"#F4F4F1"}}>{s.nombre||"Cliente"}</span>
-                      {esHoy && <span className="text-[9px] font-black text-white bg-[#16a34a] px-1.5 py-0.5 rounded-full">HOY</span>}
+                      <span className="font-bold text-[15px] text-slate-900 truncate">{s.nombre||"Cliente"}</span>
+                      {esHoy && <span className="text-[9px] font-black text-white bg-emerald-600 px-1.5 py-0.5 rounded-full shrink-0">HOY</span>}
                     </div>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-white" style={{background:est==="realizado"?"#16a34a":"#dc2626"}}>{info.label}</span>
-                  </div>
-                  <div className="text-[11px] mt-1" style={{color:"#A5A9B0"}}><Ico e="🗓" className="mr-1.5" />{fechaStr}{horaStr?<> · <Ico e="🕐" /> {horaStr}</>:null}{s.agente?<> · <Ico e="👤" /> {s.agente}</>:null}</div>
-                </div>
-                <div className="p-3">
-                  {/* Info del cliente */}
-                  <div className="space-y-1 text-xs mb-3">
-                    {s.telefono && <div className="flex items-center gap-2"><span className="text-slate-400"><Ico e="📞" /></span><a href={"tel:"+(s.telefono||"").replace(/[^0-9]/g,"").slice(-10)} className="text-[#7c3aed] font-bold">{s.telefono}</a></div>}
-                    {(s.direccion||s.ciudad) && <div className="flex items-start gap-2"><span className="text-slate-400"><Ico e="📍" /></span><span className="text-slate-600">{[s.direccion,s.ciudad,s.cp].filter(Boolean).join(", ")}</span></div>}
-                    {s.producto && <div className="flex items-center gap-2"><span className="text-slate-400"><Ico e="🔧" /></span><span className="text-slate-600">{s.producto}</span></div>}
-                    {s.servicioUltimaNota && <div className="flex items-start gap-2 bg-amber-50 rounded-lg px-2 py-1.5 mt-1"><span><Ico e="📌" /></span><span className="text-slate-700">{s.servicioUltimaNota}</span></div>}
-                  </div>
-
-                  {/* Botones de resultado — mismo abanico que la agenda */}
-                  <div className="grid grid-cols-2 gap-2 mb-2">
-                    <button onClick={()=>marcarResultado(s.id,"realizado")}
-                      className={`px-3 py-2.5 rounded-xl text-xs font-bold transition ${est==="realizado"?"text-white ring-2 ring-offset-1 ring-emerald-500":"text-emerald-700 bg-emerald-50"}`}
-                      style={est==="realizado"?{background:"#16a34a"}:{}}><Ico e="✅" className="mr-1.5" />Servicio realizado</button>
-                    <button onClick={()=>setVentaForm(ventaForm&&ventaForm.servId===s.id?null:{servId:s.id,monto:"",prod:""})}
-                      className="px-3 py-2.5 rounded-xl text-xs font-bold text-white transition"
-                      style={{background:"#047857"}}><Ico e="💰" className="mr-1.5" />Venta</button>
-                    <button onClick={()=>marcarResultado(s.id,"no_recibio")}
-                      className="px-3 py-2.5 rounded-xl text-xs font-bold text-white transition" style={{background:"#dc2626"}}><Ico e="🚪" className="mr-1.5" />No recibió</button>
-                    <button onClick={()=>marcarResultado(s.id,"no_visito")}
-                      className="px-3 py-2.5 rounded-xl text-xs font-bold text-white transition" style={{background:"#9333ea"}}><Ico e="🚷" className="mr-1.5" />No se visitó</button>
-                  </div>
-                  <button onClick={()=>marcarResultado(s.id,"reset")}
-                    className="w-full px-3 py-2 rounded-xl text-xs font-bold text-white mb-2" style={{background:"#0891b2"}}><Ico e="🔄" className="mr-1.5" />Reset servicio (queda pendiente)</button>
-                  {ventaForm && ventaForm.servId===s.id && (
-                    <div className="mb-2 p-2.5 rounded-xl border-2 border-emerald-200 bg-emerald-50 space-y-2">
-                      <select className="w-full border border-emerald-300 rounded-lg px-2 py-2 text-xs bg-white font-bold"
-                        value={ventaForm.prod} onChange={e=>setVentaForm({...ventaForm,prod:e.target.value})}>
-                        <option value="">Producto vendido…</option>
-                        {PRODUCTOS_VENTA.flatMap(p=>p.sub?p.sub.map(sb=>({id:p.id+"::"+sb.id,label:sb.label,meses:sb.meses||0})):[{id:p.id,label:p.label,meses:p.meses||0}]).map(o=>(
-                          <option key={o.id} value={o.label+"|"+o.meses}>{o.label}{o.meses?` (mant. ${o.meses}m)`:""}</option>
-                        ))}
-                      </select>
-                      <input type="number" inputMode="decimal" className="w-full border border-emerald-300 rounded-lg px-2 py-2 text-xs bg-white"
-                        placeholder="Monto de la venta" value={ventaForm.monto} onChange={e=>setVentaForm({...ventaForm,monto:e.target.value})} />
-                      <button disabled={!ventaForm.prod} onClick={()=>{ const [lbl,ms]=ventaForm.prod.split("|"); marcarResultado(s.id,"venta",{monto:ventaForm.monto,producto:lbl,meses:+ms||0}); setVentaForm(null); }}
-                        className="w-full px-3 py-2 rounded-lg text-xs font-black text-white disabled:opacity-40" style={{background:"#047857"}}>Registrar venta ✓</button>
+                    <div className="text-xs text-slate-500 mt-0.5 truncate flex items-center gap-1.5">
+                      <Ico e="🗓" size={12} /><span className="capitalize">{fechaStr}</span>{horaStr?` · ${horaStr}`:""}{s.producto?` · ${s.producto}`:""}
                     </div>
-                  )}
+                  </div>
+                  <span className={`hidden sm:inline-flex items-center text-[11px] font-bold px-2.5 py-1 rounded-full shrink-0 ${info.badge}`}>{info.label}</span>
+                  <span className={`text-slate-400 text-xs shrink-0 transition-transform duration-200 ${abierto?"rotate-180":""}`}>▾</span>
+                </button>
 
-                  {/* Detalles + nota */}
-                  <button onClick={()=>setExpandido(abierto?null:s.id)} className="w-full flex items-center justify-between px-3 py-2 rounded-xl border border-[#e5def4] bg-[#f4f6f9] text-xs font-bold text-[#5b21b6]">
-                    <span><Ico e="📝" className="mr-1.5" />{abierto?"Ocultar":"Ver detalles y nota"}</span>
-                    <span className={`transition-transform duration-200 ${abierto?"rotate-180":""}`}>▾</span>
-                  </button>
-                  {abierto && (
-                    <div className="mt-2 space-y-2">
+                {/* Detalle expandido */}
+                {abierto && (
+                  <div className="px-4 pb-4 border-t border-slate-100">
+                    <div className="sm:hidden pt-3">
+                      <span className={`inline-flex items-center text-[11px] font-bold px-2.5 py-1 rounded-full ${info.badge}`}>{info.label}</span>
+                    </div>
+                    {/* Info del cliente */}
+                    <div className="space-y-1.5 text-sm my-3">
+                      {s.telefono && <div className="flex items-center gap-2"><span className="text-slate-400 shrink-0"><Ico e="📞" size={15} /></span><a href={"tel:"+(s.telefono||"").replace(/[^0-9]/g,"").slice(-10)} className="text-[#2563EB] font-semibold">{s.telefono}</a></div>}
+                      {(s.direccion||s.ciudad) && <div className="flex items-start gap-2"><span className="text-slate-400 shrink-0 mt-0.5"><Ico e="📍" size={15} /></span><span className="text-slate-700">{[s.direccion,s.ciudad,s.cp].filter(Boolean).join(", ")}</span></div>}
+                      {s.producto && <div className="flex items-center gap-2"><span className="text-slate-400 shrink-0"><Ico e="🔧" size={15} /></span><span className="text-slate-700">{s.producto}</span></div>}
+                      {s.agente && <div className="flex items-center gap-2"><span className="text-slate-400 shrink-0"><Ico e="👤" size={15} /></span><span className="text-slate-700">{s.agente}</span></div>}
+                      {s.servicioUltimaNota && <div className="flex items-start gap-2 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-2 mt-1"><span className="text-amber-500 shrink-0 mt-0.5"><Ico e="📌" size={14} /></span><span className="text-slate-700">{s.servicioUltimaNota}</span></div>}
+                    </div>
+
+                    {/* Botones de resultado — mismo abanico que la agenda */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={()=>marcarResultado(s.id,"realizado")}
+                        className={`px-3 py-2.5 rounded-xl text-xs font-bold transition ${est==="realizado"?"text-white ring-2 ring-offset-1 ring-emerald-500":"text-emerald-700 bg-emerald-50 hover:bg-emerald-100"}`}
+                        style={est==="realizado"?{background:"#16A34A"}:{}}><Ico e="✅" className="mr-1.5" />Servicio realizado</button>
+                      <button onClick={()=>setVentaForm(ventaForm&&ventaForm.servId===s.id?null:{servId:s.id,monto:"",prod:""})}
+                        className="px-3 py-2.5 rounded-xl text-xs font-bold text-white transition hover:opacity-90"
+                        style={{background:"#047857"}}><Ico e="💰" className="mr-1.5" />Venta</button>
+                      <button onClick={()=>marcarResultado(s.id,"no_recibio")}
+                        className="px-3 py-2.5 rounded-xl text-xs font-bold text-white transition hover:opacity-90" style={{background:"#DC2626"}}><Ico e="🚪" className="mr-1.5" />No recibió</button>
+                      <button onClick={()=>marcarResultado(s.id,"no_visito")}
+                        className="px-3 py-2.5 rounded-xl text-xs font-bold text-white transition hover:opacity-90" style={{background:"#7C3AED"}}><Ico e="🚷" className="mr-1.5" />No se visitó</button>
+                    </div>
+                    <button onClick={()=>marcarResultado(s.id,"reset")}
+                      className="w-full mt-2 px-3 py-2 rounded-xl text-xs font-bold text-white hover:opacity-90" style={{background:"#0891B2"}}><Ico e="🔄" className="mr-1.5" />Reset servicio (queda pendiente)</button>
+                    {ventaForm && ventaForm.servId===s.id && (
+                      <div className="mt-2 p-2.5 rounded-xl border border-emerald-200 bg-emerald-50 space-y-2">
+                        <select className="w-full border border-emerald-300 rounded-lg px-2 py-2 text-sm bg-white font-bold text-slate-800"
+                          value={ventaForm.prod} onChange={e=>setVentaForm({...ventaForm,prod:e.target.value})}>
+                          <option value="">Producto vendido…</option>
+                          {PRODUCTOS_VENTA.flatMap(p=>p.sub?p.sub.map(sb=>({id:p.id+"::"+sb.id,label:sb.label,meses:sb.meses||0})):[{id:p.id,label:p.label,meses:p.meses||0}]).map(o=>(
+                            <option key={o.id} value={o.label+"|"+o.meses}>{o.label}{o.meses?` (mant. ${o.meses}m)`:""}</option>
+                          ))}
+                        </select>
+                        <input type="number" inputMode="decimal" className="w-full border border-emerald-300 rounded-lg px-2 py-2 text-sm bg-white text-slate-800"
+                          placeholder="Monto de la venta" value={ventaForm.monto} onChange={e=>setVentaForm({...ventaForm,monto:e.target.value})} />
+                        <button disabled={!ventaForm.prod} onClick={()=>{ const [lbl,ms]=ventaForm.prod.split("|"); marcarResultado(s.id,"venta",{monto:ventaForm.monto,producto:lbl,meses:+ms||0}); setVentaForm(null); }}
+                          className="w-full px-3 py-2 rounded-lg text-xs font-black text-white disabled:opacity-40" style={{background:"#047857"}}>Registrar venta ✓</button>
+                      </div>
+                    )}
+
+                    {/* Nota del servicio */}
+                    <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
+                      <div className="text-[10px] font-black text-slate-500 uppercase tracking-wider"><Ico e="📝" className="mr-1.5" />Nota del servicio</div>
                       <div className="flex gap-1.5">
                         <input value={notaEdit[s.id]||""} onChange={e=>setNotaEdit(p=>({...p,[s.id]:e.target.value}))}
-                          onKeyDown={e=>{if(e.key==="Enter")guardarNota(s.id);}}
+                          onKeyDown={e=>{if(e.key==="Enter"&&!e.nativeEvent.isComposing)guardarNota(s.id);}}
                           placeholder="Escribir nota del servicio…"
-                          className="flex-1 border border-[#e5def4] rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-[#7c3aed]" />
+                          className="flex-1 border border-slate-200 rounded-lg px-2.5 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#2563EB]/30 focus:border-[#2563EB]" />
                         <button onClick={()=>guardarNota(s.id)} disabled={!(notaEdit[s.id]||"").trim()}
-                          className="px-3 py-1.5 rounded-lg text-xs font-bold text-white disabled:opacity-40" style={{background:"#16a34a"}}>Guardar</button>
+                          className="px-3 py-2 rounded-lg text-xs font-bold text-white disabled:opacity-40" style={{background:"#16A34A"}}>Guardar</button>
                       </div>
                       {(s.servicioNotas||[]).length>0 && (
                         <div className="space-y-1 max-h-40 overflow-y-auto">
-                          <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Historial de notas</div>
+                          <div className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Historial de notas</div>
                           {[...(s.servicioNotas||[])].reverse().map((n,i)=>{
                             const nd=new Date(n.fecha);
                             return (
-                              <div key={i} className="bg-[#f4f6f9] rounded-lg px-2 py-1.5 text-[11px]">
+                              <div key={i} className="bg-slate-50 border border-slate-100 rounded-lg px-2.5 py-1.5 text-[11px]">
                                 <div className="text-slate-700">{n.texto}</div>
-                                <div className="text-[9px] text-slate-400 mt-0.5"><Ico e="📅" className="mr-1.5" />{nd.toLocaleDateString("es-MX",{day:"numeric",month:"short"})} 🕐 {nd.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"})}{n.agente?<> · <Ico e="👤" /> {n.agente}</>:null}</div>
+                                <div className="text-[9px] text-slate-400 mt-0.5"><Ico e="📅" className="mr-1" />{nd.toLocaleDateString("es-MX",{day:"numeric",month:"short"})} · {nd.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"})}{n.agente?` · ${n.agente}`:""}</div>
                               </div>
                             );
                           })}
@@ -8033,8 +8041,8 @@ function ServicioSection({ appts, setAppts, agente, notify, allData }) {
                         </div>
                       )}
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -8779,7 +8787,7 @@ export default function App() {
           <button onClick={()=>setShowAI(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#2563EB] text-white text-xs font-bold hover:bg-[#1D4ED8] active:scale-[0.98] transition"><Ico e="🤖" size={14} />IA</button>
         </header>
         <main className="flex-1 px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-7">
-          <div className="w-full max-w-[1480px] mx-auto min-h-[70vh]">
+          <div className="w-full max-w-[1480px] mx-auto">
             {!synced && hydrated && <div className="mb-4 flex items-center gap-2 rounded-xl bg-[#EFF6FF] border border-[#BFDBFE] text-[#1D4ED8] px-3.5 py-2 text-xs font-semibold"><span className="w-3.5 h-3.5 border-2 border-[#BFDBFE] border-t-[#2563EB] rounded-full animate-spin shrink-0" />Sincronizando con la nube… mostrando tu última copia guardada.</div>}
             {importMsg && <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-700 font-bold flex items-center justify-between"><Msg>{importMsg}</Msg><button onClick={()=>setImportMsg("")} className="ml-2"><Ico e="✕" /></button></div>}
             {fbError && <div className="mb-4 flex items-start gap-2 bg-red-50 border-2 border-red-300 text-red-700 rounded-xl px-4 py-3 text-sm font-bold">
