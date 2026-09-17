@@ -8195,22 +8195,7 @@ function ConfigSection({ agenteActivo, onCerrarSesion, rolActivo, emailActivo, c
 
 // ─── PANTALLA DE LOGIN ────────────────────────────────────────
 // ─── LOGIN CON FIREBASE (correo + clave) ──────────────────────
-function FirebaseLoginScreen({ onLogin, onReset, error, busy }) {
-  const [email,setEmail]=useState("");
-  const [clave,setClave]=useState("");
-  const [verClave,setVerClave]=useState(false);
-  const [resetMsg,setResetMsg]=useState("");
-
-  const entrar=()=>{ if(email.trim() && clave) onLogin(email, clave); };
-  const recuperar=async ()=>{
-    if(!email.trim()){ setResetMsg("Escribe tu correo arriba y vuelve a tocar."); return; }
-    setResetMsg("Enviando…");
-    const ok=await onReset(email);
-    setResetMsg(ok
-      ? "✅ Te enviamos un correo para restablecer tu clave. Revisa tu bandeja (y spam)."
-      : "No se pudo enviar. Revisa que el correo esté bien escrito.");
-  };
-
+function FirebaseLoginScreen({ onGoogle, error, busy }) {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{background:RP.navyDark}}>
       <div aria-hidden className="pointer-events-none absolute -top-40 left-1/2 -translate-x-1/2 w-[640px] h-[640px] rounded-full opacity-[0.06]"
@@ -8222,38 +8207,26 @@ function FirebaseLoginScreen({ onLogin, onReset, error, busy }) {
         </div>
 
         <div className="rounded-2xl p-7 shadow-2xl" style={{background:RP.navy,border:`1px solid ${RP.silver2}`}}>
-          <label className="block text-[11px] font-bold uppercase tracking-[0.14em] mb-1.5 text-[#A5A9B0]">Correo</label>
-          <input type="email" value={email} autoCapitalize="off" autoCorrect="off" spellCheck={false}
-            onChange={e=>{setEmail(e.target.value);setResetMsg("");}}
-            onKeyDown={e=>{if(e.key==="Enter")entrar();}}
-            className="w-full rounded-xl px-4 py-3.5 text-base bg-[#0B0E12] text-[#F4F4F1] border border-white/12 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition placeholder:text-[#717680] mb-4"
-            placeholder="tucorreo@gmail.com" autoFocus />
-
-          <label className="block text-[11px] font-bold uppercase tracking-[0.14em] mb-1.5 text-[#A5A9B0]">Clave</label>
-          <div className="relative mb-5">
-            <input type={verClave?"text":"password"} value={clave}
-              onChange={e=>setClave(e.target.value)}
-              onKeyDown={e=>{if(e.key==="Enter")entrar();}}
-              className="w-full rounded-xl px-4 py-3.5 text-base bg-[#0B0E12] text-[#F4F4F1] border border-white/12 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition placeholder:text-[#717680] pr-12"
-              placeholder="Tu clave" />
-              <button onClick={()=>setVerClave(p=>!p)} aria-label={verClave?"Ocultar clave":"Mostrar clave"} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#717680] hover:text-[#A5A9B0] transition"><Ico e={verClave?"🙈":"👁️"} size={18} /></button>
+          <div className="text-center mb-5">
+            <div className="text-lg font-extrabold tracking-tight text-[#F4F4F1]">Iniciar sesión</div>
+            <div className="text-sm text-[#A5A9B0] mt-1">Usa la cuenta de Google autorizada para ImpactOS.</div>
           </div>
 
-          {error && <div className="mb-3 text-sm font-semibold text-[#FCA5A5] bg-[#F87171]/10 border border-[#F87171]/30 rounded-xl px-3 py-2">{error}</div>}
-          {resetMsg && <div className="mb-3 text-sm font-semibold text-[#F4F4F1] bg-white/5 border border-white/12 rounded-xl px-3 py-2">{resetMsg}</div>}
+          {error && <div className="mb-4 text-sm font-semibold text-[#FCA5A5] bg-[#F87171]/10 border border-[#F87171]/30 rounded-xl px-3 py-2">{error}</div>}
 
-          <button onClick={entrar} disabled={busy}
-            className="group w-full px-4 py-3.5 rounded-xl text-base font-bold tracking-tight flex items-center justify-center gap-2 hover:brightness-95 transition active:scale-[0.98] disabled:opacity-40"
-            style={{background:RP.btn,color:RP.btnText}}>
-            {busy ? "Entrando…" : <>INICIAR SESIÓN <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"><path d="M7 17L17 7M9 7h8v8" /></svg></>}
-          </button>
-
-          <button onClick={recuperar} className="w-full mt-4 text-[11px] font-bold text-[#A5A9B0] hover:text-[#F4F4F1] transition">
-            ¿Olvidaste tu clave?
+          <button onClick={onGoogle} disabled={busy}
+            className="w-full px-4 py-3.5 rounded-xl text-base font-bold flex items-center justify-center gap-3 transition active:scale-[0.98] disabled:opacity-40 bg-white text-[#1f2d3d] hover:bg-slate-50">
+            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#4285F4" d="M21.6 12.23c0-.71-.06-1.4-.18-2.07H12v3.92h5.38a4.6 4.6 0 0 1-2 3.02v2.54h3.24c1.9-1.75 2.98-4.33 2.98-7.41Z"/>
+              <path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.63-2.43l-3.24-2.54c-.9.6-2.05.96-3.39.96-2.61 0-4.82-1.76-5.61-4.13H3.04v2.62A10 10 0 0 0 12 22Z"/>
+              <path fill="#FBBC05" d="M6.39 13.86A6 6 0 0 1 6.08 12c0-.65.11-1.28.31-1.86V7.52H3.04A10 10 0 0 0 2 12c0 1.61.38 3.14 1.04 4.48l3.35-2.62Z"/>
+              <path fill="#EA4335" d="M12 6.01c1.47 0 2.79.5 3.82 1.5l2.87-2.87A9.62 9.62 0 0 0 12 2a10 10 0 0 0-8.96 5.52l3.35 2.62C7.18 7.77 9.39 6.01 12 6.01Z"/>
+            </svg>
+            {busy ? "Conectando…" : "Continuar con Google"}
           </button>
 
           <div className="mt-5 pt-4 border-t border-white/10 text-[11px] text-[#717680] text-center leading-relaxed">
-            Entra con el correo y la clave que te asignaron. ¿Sin acceso? Pídeselo a tu administrador.
+            Solo las cuentas autorizadas por el administrador pueden entrar.
           </div>
         </div>
       </div>
@@ -8305,20 +8278,20 @@ export default function App() {
   const puedeGestionarIncentivos = puedeCrearIncentivosRol(rolUsuario);
   const [showNotifs,setShowNotifs]=useState(false);
 
-  const iniciarSesion=async(correo,clave)=>{
+  const iniciarSesionGoogle=async()=>{
     setLoginError(""); setLoginBusy(true);
     try {
       const auth=await getAuth();
-      await auth.signInWithEmailAndPassword((correo||"").trim(), clave);
-      // onAuthStateChanged actualiza authUser solo
+      const provider=new window.firebase.auth.GoogleAuthProvider();
+      provider.setCustomParameters({prompt:"select_account"});
+      await auth.signInWithPopup(provider);
+      // onAuthStateChanged actualiza authUser; después ImpactOS valida si el correo está autorizado.
     } catch(e){
       const c=e?.code||"";
-      setLoginError(c.includes("too-many") ? "Demasiados intentos. Espera un momento e intenta de nuevo." : "Correo o clave incorrectos.");
+      if(c.includes("popup-closed") || c.includes("cancelled-popup")) setLoginError("Inicio de sesión cancelado.");
+      else if(c.includes("popup-blocked")) setLoginError("El navegador bloqueó la ventana de Google. Permite ventanas emergentes e inténtalo otra vez.");
+      else setLoginError("No se pudo iniciar sesión con Google. Inténtalo de nuevo.");
     } finally { setLoginBusy(false); }
-  };
-  const recuperarClave=async(correo)=>{
-    try { const auth=await getAuth(); await auth.sendPasswordResetEmail((correo||"").trim()); return true; }
-    catch { return false; }
   };
   const cerrarSesion=async()=>{ try { const auth=await getAuth(); await auth.signOut(); } catch {} };
 
@@ -8637,7 +8610,7 @@ export default function App() {
   }
   // Sin sesión → pantalla de login de Firebase
   if(!authUser){
-    return <FirebaseLoginScreen onLogin={iniciarSesion} onReset={recuperarClave} error={loginError} busy={loginBusy} />;
+    return <FirebaseLoginScreen onGoogle={iniciarSesionGoogle} error={loginError} busy={loginBusy} />;
   }
   // Correo autenticado pero no autorizado en esta app
   if(!emailOk){
