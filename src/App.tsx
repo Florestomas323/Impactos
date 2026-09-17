@@ -5334,8 +5334,8 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
     <div>
       {calMsg && <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-700 font-bold flex items-center justify-between"><Msg>{calMsg}</Msg><button onClick={()=>setCalMsg("")} className="ml-2"><Ico e="✕" /></button></div>}
 
-      {/* Sub-pestañas */}
-      <div className="flex gap-1.5 mb-4">
+      {/* Sub-pestañas — estilo SaaS claro */}
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
         {[
           {id:"prioridad",ico:"🔥", label:"Prioridad",n:prioridadHoy.length},
           {id:"pendientes",ico:"⏳", label:"Pendientes",n:pendientesAll.length},
@@ -5343,31 +5343,35 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
           {id:"zonas",ico:"📍", label:"Zonas",n:Object.keys(todosClientes.reduce((a,c)=>{if(c.ciudad)a[normTexto(limpiaCiudad(c.ciudad))]=1;return a;},{})).length},
           {id:"hoy",ico:"✅", label:"Hoy",n:llamadasHoy.length},
           {id:"total",ico:"📊", label:"Total",n:llamadasTotal.length},
-        ].map(t=>(
-          <button key={t.id} onClick={()=>setSubTab(t.id)}
-            className={`flex-1 px-1 py-2.5 rounded-xl text-[10px] font-bold transition flex flex-col items-center gap-0.5 ${subTab===t.id?"text-white":"text-slate-600 bg-[#f4f6f9]"}`}
-            style={subTab===t.id?{background:RP.navy}:{}}>
-            <span>{t.label}</span>
-            <span className={`text-base font-black ${subTab===t.id?"text-white":"text-[#5b21b6]"}`} style={{fontFamily:SERIF}}>{t.n}</span>
-          </button>
-        ))}
+        ].map(t=>{
+          const activo=subTab===t.id;
+          return (
+            <button key={t.id} onClick={()=>setSubTab(t.id)}
+              className={`min-w-0 rounded-xl border px-3 py-3 text-left transition active:scale-[0.98] ${activo?"border-[#2563EB] bg-[#EEF4FF] shadow-sm":"border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className={`text-[10px] font-semibold truncate ${activo?"text-[#1D4ED8]":"text-slate-500"}`}>{t.label}</span>
+                <span className={activo?"text-[#2563EB]":"text-slate-400"}><Ico e={t.ico} size={13} /></span>
+              </div>
+              <div className={`mt-1 text-lg font-black tracking-tight ${activo?"text-[#1D4ED8]":"text-slate-950"}`}>{t.n.toLocaleString("en-US")}</div>
+            </button>
+          );
+        })}
       </div>
 
       {/* ── FILTRO de ciudad + CP — visible en todas las vistas excepto Hoy/Total (que son de llamadas) ── */}
       {["prioridad","pendientes","estados","zonas"].includes(subTab) && (
         <>
-          <input className="w-full border-2 border-[#e5def4] rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-[#7c3aed] mb-2" placeholder="Buscar por nombre o teléfono…" name="buscar-llamadas" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={search} onChange={e=>setSearch(e.target.value)} />
+          <input className="w-full border border-slate-200 rounded-xl px-3 py-3 text-sm bg-white text-slate-900 shadow-sm focus:outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/10 mb-3" placeholder="Buscar por nombre o teléfono…" name="buscar-llamadas" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={search} onChange={e=>setSearch(e.target.value)} />
           {/* ── FILTRO POR BASE ── */}
           <div className="flex gap-1.5 mb-2 overflow-x-auto pb-1">
             {[["todas","📋","Todas"],["agregados","➕","Agregados"],["distribucion","🚚","Distribución"],["referidos","🔗","Referidos"],["prospectos","🎯","Prospección"]].map(([id,ico,label])=>(
               <button key={id} onClick={()=>setFilterBase(id)}
-                className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-black transition ${filterBase===id?"text-white":"bg-white text-slate-500 border border-[#e5def4]"}`}
-                style={filterBase===id?{background:RP.navy}:{}}><Ico e={ico} size={12} />{label}</button>
+                className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-semibold border transition ${filterBase===id?"text-white border-[#2563EB] bg-[#2563EB] shadow-sm":"bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}`}><Ico e={ico} size={12} />{label}</button>
             ))}
           </div>
           <div className="flex gap-2 mb-3">
             <div className="flex-1 relative">
-              <input list="ciudades-llamadas" className="w-full border-2 border-[#e5def4] rounded-lg px-2 py-2 text-xs bg-white font-bold text-slate-700 focus:outline-none focus:border-[#7c3aed]"
+              <input list="ciudades-llamadas" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-xs bg-white font-semibold text-slate-700 shadow-sm focus:outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/10"
                 placeholder={`Filtrar ciudad (${cities.length} disponibles)`}
                 name="filtro-ciudad-llamadas" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
                 value={filterCity} onChange={e=>setFilterCity(e.target.value)} />
@@ -5375,7 +5379,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
                 {cities.map(c=><option key={c} value={c}>{c}</option>)}
               </datalist>
             </div>
-            <input className="border-2 border-[#e5def4] rounded-lg px-2 py-2 text-xs bg-white font-bold text-slate-700 w-24"
+            <input className="border border-slate-200 rounded-xl px-3 py-2.5 text-xs bg-white font-semibold text-slate-700 w-28 shadow-sm focus:outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/10"
               placeholder="C.P. (5 díg)" inputMode="numeric" maxLength={10}
               name="filtro-cp-llamadas" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
               value={filterCP} onChange={e=>setFilterCP(e.target.value)} />
