@@ -2,6 +2,10 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import * as LU from "lucide-react";
 import { Ico } from "../../iconos";
 import { unirHistorial } from "../../utils/history";
+import { ACCESS_V2 } from "../../config/flags";
+import { asList } from "../../services/assignments";
+// Modo v2: historial de cobranza leído de forma segura (mapa → lista). Producción: `v || []`.
+const lstCob = ACCESS_V2 ? asList : (v) => v || [];
 import { genId } from "../../utils/ids";
 
 const __CobranzaModule = (function () {
@@ -4187,7 +4191,7 @@ function CobranzaSection({
     const ult = snapsMes[snapsMes.length - 1];
     if (!ult) return 0;
     let t = 0;
-    Object.values(clientesData || {}).forEach(c => (c.historial || []).forEach(h => {
+    Object.values(clientesData || {}).forEach(c => lstCob(c.historial).forEach(h => {
       if (h.tipo === "pago" && h.fecha > ult.fecha) t += +h.monto || 0;
     }));
     pagosExternos.forEach(h => { if (h.fecha > ult.fecha) t += +h.monto || 0; });
@@ -4302,7 +4306,7 @@ function CobranzaSection({
       atraso: +ov.atraso || 0,
       emprendedor: ov.emprendedor || "",
       cuotaEstimada: ov.cuotaEstimada || false,
-      historial: ov.historial || [],
+      historial: lstCob(ov.historial),
       promesa: ov.promesa || null,
       cartera: ov.cartera || "dist",
       nivel: ov.nivel || "",
@@ -4448,7 +4452,7 @@ function CobranzaSection({
         promesa: null,
         rango: nuevoRango,
         atraso: nuevoAtraso,
-        historial: [...(ov.historial || []), {
+        historial: [...lstCob(ov.historial), {
           fecha: fechaPago,
           monto,
           metodo,
@@ -4463,7 +4467,7 @@ function CobranzaSection({
   };
   const deshacerPago = id => {
     updCliente(id, ov => {
-      const h = [...(ov.historial || [])];
+      const h = [...lstCob(ov.historial)];
       const i = h.map(x => x.tipo).lastIndexOf("pago");
       if (i < 0) return ov;
       const p = h.splice(i, 1)[0];
@@ -4488,7 +4492,7 @@ function CobranzaSection({
         hora,
         monto
       },
-      historial: [...(ov.historial || []), {
+      historial: [...lstCob(ov.historial), {
         fecha: todayISO(),
         monto: monto || 0,
         metodo: `para ${fecha} ${hora}`,
@@ -4501,7 +4505,7 @@ function CobranzaSection({
     updCliente(id, ov => ({
       ...ov,
       promesa: null,
-      historial: [...(ov.historial || []), {
+      historial: [...lstCob(ov.historial), {
         fecha: todayISO(),
         monto: 0,
         metodo: "",
@@ -4640,7 +4644,7 @@ function CobranzaSection({
           diasAtraso: (+r.diasAtraso >= 0 && r.diasAtraso !== "") ? +r.diasAtraso : (ov.diasAtraso ?? null),
           emprendedor: r.emprendedor || ov.emprendedor || "",
           email: r.email || ov.email || "",
-          historial: ov.historial || [],
+          historial: lstCob(ov.historial),
           // Identidad: se ACTUALIZA con lo que traiga el reporte (suplantar), pero
           // nunca se borra si el reporte viene vacío. Se guardan en las mismas
           // llaves que usa el índice anti-duplicados (nombre/telefono/numeroCuenta).
@@ -4669,7 +4673,7 @@ function CobranzaSection({
       ...ov,
       ...clean,
       _oculto: false,
-      historial: ov.historial || []
+      historial: lstCob(ov.historial)
     }));
     toast(id ? "Ficha actualizada" : "Cliente agregado a cobranza");
   };
