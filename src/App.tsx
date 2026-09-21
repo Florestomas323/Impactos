@@ -13,11 +13,32 @@ import { useV2Store, prepareDbV2 } from "./data/store";
 import { UserManagement } from "./components/users/UserManagement";
 import { AccessScreen } from "./components/users/AccessScreen";
 import { AssignmentManager } from "./components/assignments/AssignmentManager";
+import { V2ErrorBoundary } from "./components/V2ErrorBoundary";
+import { asList } from "./services/assignments";
+
 import { CUENTA_ROOT, CUENTA_ROOT_DATOS, SEMILLA_CUENTAS, CUENTAS_DINAMICAS, setCuentasDinamicas, todasLasCuentas, cuentaAutorizada, cuentaDeEmail } from "./auth/accounts";
 import { unirHistorial } from "./utils/history";
 import { genId } from "./utils/ids";
 import { CobranzaSection } from "./modules/collections/CobranzaSection";
 import { BuscadorCodigos, SimuladorCompra } from "./modules/catalog/CatalogModule";
+
+// ── LECTURA SEGURA DE LISTAS HISTÓRICAS ──────────────────────────────────────
+// Registros viejos pueden traer historial/referidos como mapa y notas como texto.
+// • Producción (ACCESS_V2 apagado): EXACTAMENTE `v || []`, como siempre.
+// • Modo v2: asList() — lee arrays, mapas {id: item} y descarta texto/null
+//   sin modificar nunca el valor guardado.
+const lst = ACCESS_V2 ? asList : (v)=> v || [];
+// notas: misma regla que ya usa la tarjeta del cliente — un texto viejo cuenta
+// como UNA nota (se conserva su contenido, jamás se parte en letras).
+const notasLst = ACCESS_V2
+  ? (v)=> (typeof v==="string" ? (v.trim() ? [{texto:v.trim(), fecha:"", agente:"", legado:true}] : []) : asList(v))
+  : (v)=> v || [];
+// Reclutamiento guarda sus notas como TEXTO. En v2, si llegan como lista, se
+// muestran unidas (solo lectura del valor; se guarda texto únicamente si la
+// persona edita la nota). Producción: el valor tal cual, como siempre.
+const notaTexto = ACCESS_V2
+  ? (v)=> (typeof v==="string" ? v : asList(v).map(n=> typeof n==="string" ? n : (n && n.texto) || "").filter(Boolean).join("\n"))
+  : (v)=> v;
 
 // ═══════════════════════════════════════════════════════════════
 //  IMPACT OS — DARK PREMIUM PALETTE
@@ -210,9 +231,9 @@ function contactosPorDia(data){
     mapa[dia][ag] = (mapa[dia][ag] || 0) + 1;
   };
   ["agregados","prospectos","distribucion"].forEach(sec =>
-    ((data && data[sec]) || []).forEach(c => (c.historial || []).forEach(push)));
+    ((data && data[sec]) || []).forEach(c => lst(c.historial).forEach(push)));
   ((data && data.referidos) || []).forEach(anf =>
-    (anf.referidos || []).forEach(r => (r.historial || []).forEach(push)));
+    lst(anf.referidos).forEach(r => lst(r.historial).forEach(push)));
   return mapa;
 }
 // El HISTORIAL manda: si un día tiene aunque sea una entrada en el historial,
@@ -262,7 +283,7 @@ function mergeClienteBase(loc, rem){
   if(ul[1]) m.ultimo_llamado = ul[1];
   if(loc.referidos || rem.referidos){
     // anfitriones: gana la versión con MÁS información en sus referidos
-    const peso = arr => (arr||[]).reduce((t,r)=>t+(r.historial||[]).length+((r.notas||"").length?1:0),0) + (arr||[]).length;
+    const peso = arr => (arr||[]).reduce((t,r)=>t+lst(r.historial).length+((r.notas||"").length?1:0),0) + (arr||[]).length;
     m.referidos = peso(loc.referidos) > peso(rem.referidos) ? loc.referidos : rem.referidos;
   }
   return m;
@@ -497,7 +518,7 @@ function calcularCartuchos(flatClientes, appts, ventanaDias=30, hoy=new Date()){
   };
   // Ventas registradas en el historial de los clientes
   (flatClientes||[]).forEach(c=>{
-    (c.historial||[]).forEach(h=>{
+    lst(c.historial).forEach(h=>{
       if((h.cita_resultado==="demo_venta"||h.cita_resultado==="venta") && h.cartucho_meses>0){
         push(c.nombre||c.anfitrion, c.telefono||c.anfitrion_telefono, h.producto, h.cartucho_meses, h.fecha, "cliente");
       }
@@ -529,7 +550,7 @@ function contarVentasDemos({ appts=[], clientes=[], enP=()=>true, agente="" }={}
     if(a.resultado==="demo_venta"||a.resultado==="venta"){ ventas++; demos++; volumen+=Number(a.monto)||0; }
     else if(a.resultado==="demo_no_venta"||a.resultado==="no_venta"){ demos++; }
   });
-  (clientes||[]).forEach(c=>(c.historial||[]).forEach(h=>{
+  (clientes||[]).forEach(c=>lst(c.historial).forEach(h=>{
     if(!enP(h.fecha)) return;
     if(agente && h.agente && h.agente!==agente) return;
     if(h.cita_resultado==="demo_venta"||h.cita_resultado==="venta"){ ventas++; demos++; volumen+=Number(h.monto)||0; }
@@ -556,14 +577,14 @@ function makeHistorialEntry({ tipo="llamada", estado="", notas="", agente="", ci
 }
 // Agrega una entrada de historial al cliente con ese id, dentro de un array.
 function addHistorialEntry(arr, id, entry) {
-  return (arr||[]).map(x => x.id===id ? {...x, historial:[...(x.historial||[]), entry]} : x);
+  return (arr||[]).map(x => x.id===id ? {...x, historial:[...lst(x.historial), entry]} : x);
 }
 // Elimina UNA entrada del historial de un cliente (por id de entrada o fecha).
 // Deja un registro mínimo de que se eliminó. NO borra al cliente ni sus datos.
 function deleteHistorialEntry(arr, clienteId, entryKey) {
   return (arr||[]).map(x => {
     if(x.id!==clienteId) return x;
-    const nuevoHist=(x.historial||[]).filter(h=>(h.id||h.fecha)!==entryKey);
+    const nuevoHist=lst(x.historial).filter(h=>(h.id||h.fecha)!==entryKey);
     return {...x, historial:nuevoHist, actualizado:new Date().toISOString()};
   });
 }
@@ -574,7 +595,7 @@ function agregarNota(cliente, texto, agente="") {
   const t = (texto||"").trim();
   if(!t) return cliente;
   const nueva = { texto:t, fecha:new Date().toISOString(), agente };
-  const notasPrev = cliente.notas || [];
+  const notasPrev = notasLst(cliente.notas);
   return {
     ...cliente,
     ultimaNota: t,
@@ -1256,7 +1277,7 @@ function calcularSemanaAgente(agente, allData){
     ...(allData.agregados||[]),
     ...(allData.prospectos||[]),
     ...(allData.distribucion||[]),
-    ...((allData.referidos||[]).flatMap(anf=>(anf.referidos||[]))),
+    ...((allData.referidos||[]).flatMap(anf=>lst(anf.referidos))),
   ];
   let citas=0, demos=0, ventas=0, volumen=0;
   (allData.appts||[]).forEach(a=>{
@@ -1266,7 +1287,7 @@ function calcularSemanaAgente(agente, allData){
     if((a.resultado==="demo_venta"||a.resultado==="venta") && a.monto) volumen += Number(a.monto)||0;
   });
   clientes.forEach(c=>{
-    (c.historial||[]).forEach(h=>{
+    lst(c.historial).forEach(h=>{
       if(agente && h.agente!==agente) return;
       if(!enSemana(h.fecha)) return;
       if(h.cita_resultado==="demo_venta"||h.cita_resultado==="demo_no_venta"||h.cita_resultado==="venta"||h.cita_resultado==="no_venta") demos++;
@@ -1578,11 +1599,11 @@ function exportRespaldo(allData, appts, callLog, opts){
     ...(allData.agregados||[]),
     ...(allData.prospectos||[]),
     ...(allData.distribucion||[]),
-    ...((allData.referidos||[]).flatMap(anf=>(anf.referidos||[]))),
+    ...((allData.referidos||[]).flatMap(anf=>lst(anf.referidos))),
   ];
   const histRows=[];
   clientesTodos.forEach(c=>{
-    (c.historial||[]).forEach(h=>{
+    lst(c.historial).forEach(h=>{
       if(!enMes(h.fecha)) return;
       histRows.push({ fecha:h.fecha, cliente:c.nombre||c.anfitrion||"(Sin nombre)", agente:h.agente||"", resultado:h.cita_resultado||h.resultado||h.tipo||"", nota:h.nota||h.observacion||"" });
     });
@@ -1590,11 +1611,11 @@ function exportRespaldo(allData, appts, callLog, opts){
   histRows.sort((a,b)=>new Date(b.fecha||0)-new Date(a.fecha||0));
 
   // BASES (en modo mes: solo clientes con actividad ese mes)
-  const baseRows=(arr)=> (arr||[]).filter(c=>!c.eliminado && (!esMes || (c.historial||[]).some(h=>enMes(h.fecha))));
+  const baseRows=(arr)=> (arr||[]).filter(c=>!c.eliminado && (!esMes || lst(c.historial).some(h=>enMes(h.fecha))));
   const agregados=baseRows(allData.agregados);
   const prospectos=baseRows(allData.prospectos);
   const distribucion=baseRows(allData.distribucion);
-  const referidosAnf=(allData.referidos||[]).filter(anf=>!anf.eliminado && (!esMes || (anf.referidos||[]).some(r=>(r.historial||[]).some(h=>enMes(h.fecha)))));
+  const referidosAnf=(allData.referidos||[]).filter(anf=>!anf.eliminado && (!esMes || lst(anf.referidos).some(r=>lst(r.historial).some(h=>enMes(h.fecha)))));
 
   const tablaClientes=(titulo, arr)=>{
     if(!arr.length) return secVacia(titulo);
@@ -1611,7 +1632,7 @@ function exportRespaldo(allData, appts, callLog, opts){
     if(!arr.length) return secVacia("Programa Referidos");
     let total=0;
     const bloques=arr.map(anf=>{
-      const refs=(anf.referidos||[]);
+      const refs=lst(anf.referidos);
       total+=refs.length;
       const filas=refs.map(r=>`<tr><td class="b">${esc(r.nombre||"")}</td><td>${esc(r.telefono||"")}</td><td>${esc(r.ciudad||"")}</td><td><span class="tag">${esc(estadoLabel(r.estado))}</span></td></tr>`).join("");
       return `<div class="anf">Anfitrión: <b>${esc(anf.anfitrion||"")}</b>${anf.regalo?` · Regalo: ${esc(anf.regalo)}`:""}</div>
@@ -2555,7 +2576,7 @@ Formato EXACTO: {"registros":[{"nombre":"","numeroCuenta":"","direccion":"","tel
   const confirm=()=>{
     if(dest==="referidos"){if(!refPreview?.length)return;
       onExtracted(refPreview.map(r=>({...emptyReferido(),anfitrion:r.anfitrion||"",regalo:r.regalo||"",
-        referidos:(r.referidos||[]).map(x=>({nombre:x.nombre||"",parentesco:x.parentesco||"",telefono:x.telefono||"",direccion:x.direccion||"",producto:x.producto||"",observaciones:x.observaciones||"",detalles:"",estado:"sin_estado"})),id:genId()})),"referidos");
+        referidos:lst(r.referidos).map(x=>({nombre:x.nombre||"",parentesco:x.parentesco||"",telefono:x.telefono||"",direccion:x.direccion||"",producto:x.producto||"",observaciones:x.observaciones||"",detalles:"",estado:"sin_estado"})),id:genId()})),"referidos");
     }else{if(!preview?.length)return;
       // Mapear los campos nuevos de la IA al modelo del cliente
       const mapped=preview.map(r=>{
@@ -2646,7 +2667,7 @@ Formato EXACTO: {"registros":[{"nombre":"","numeroCuenta":"","direccion":"","tel
                   <button onClick={()=>setRefPreview(p=>p.filter((_,j)=>j!==i))} className="text-red-400 text-xs font-bold shrink-0"><Ico e="🗑" /></button>
                 </div>
                 <input value={r.regalo||""} onChange={e=>setRefPreview(p=>p.map((x,j)=>j===i?{...x,regalo:e.target.value}:x))} className="w-full bg-white border border-[#e5def4] rounded px-2 py-1 text-xs text-slate-600" placeholder="Regalo" />
-                <div className="text-slate-400 text-[10px] mt-1">{r.referidos?.length||0} referido(s)</div>
+                <div className="text-slate-400 text-[10px] mt-1">{lst(r.referidos).length||0} referido(s)</div>
               </div>
             ))
             :preview.map((r,i)=>(
@@ -2862,7 +2883,7 @@ function ClientRow({ c, onStatusChange, onEdit, onSchedule, onDelete, onRestore,
   }
   const s=STATUS_COLORS[c.estado]||STATUS_COLORS.sin_estado;
   const isCita=c.estado==="verde";
-  const historial=c.historial||[];
+  const historial=lst(c.historial);
   // notas: solo entradas reales {texto,...}. Si el campo es texto legado, se
   // muestra como UNA nota (nunca se parte en letras) y se ignoran las vacías.
   const notas=(Array.isArray(c.notas)
@@ -3434,7 +3455,7 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
         if(appt.notas && appt.notas.trim()){
           const notaCita=`[Cita ${appt.tipo||"cita"} ${(appt.fecha||"").slice(0,10)}] ${appt.notas.trim()}`;
           upd.ultimaNota=notaCita;
-          upd.notas=[...(upd.notas||[]),{texto:notaCita,fecha:new Date().toISOString(),agente:appt.agente||agente}];
+          upd.notas=[...notasLst(upd.notas),{texto:notaCita,fecha:new Date().toISOString(),agente:appt.agente||agente}];
         }
         // Próximo seguimiento: si el tipo es seguimiento o llamada
         if(["llamada","seguimiento","reset"].includes(appt.tipo) && appt.fecha){
@@ -3556,7 +3577,7 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
             {(()=>{
               const anfCard={...c, nombre:c.anfitrion||"(Sin anfitrión)", telefono:c.anfitrion_telefono||"", ciudad:c.anfitrion_ciudad||"", cuenta:c.anfitrion_cuenta||"", direccion:c.anfitrion_direccion||""};
               const patchAnf=(patch)=>setData(p=>p.map(anf=>anf.id===c.id?{...anf,...patch}:anf));
-              const saveHistAnf=(entry)=>setData(p=>p.map(anf=>anf.id===c.id?{...anf,historial:[...(anf.historial||[]),entry]}:anf));
+              const saveHistAnf=(entry)=>setData(p=>p.map(anf=>anf.id===c.id?{...anf,historial:[...lst(anf.historial),entry]}:anf));
               return (
                 <ClientRow c={anfCard} type="anfitrion" role={role}
                   onStatusChange={(id,st)=>patchAnf({estado:st})}
@@ -3587,7 +3608,7 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
 
             {/* Resumen de progreso de referidos (para obsequio) */}
             {(()=>{
-              const refs=c.referidos||[];
+              const refs=lst(c.referidos);
               const citas=refs.filter(r=>r.estado==="verde").length;
               const ventas=refs.filter(r=>r.venta||r.resultado==="venta").length;
               if(refs.length===0) return null;
@@ -3605,8 +3626,8 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
             {/* Cada referido como tarjeta completa */}
             <div className="mt-3 space-y-2">
               <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Ico e="👥" className="mr-1.5" />Referidos (cada uno es llamable)</div>
-              {(c.referidos||[]).length===0 && <div className="text-xs text-slate-400 italic">Sin referidos aún. Toca ✏️ Editar para agregar.</div>}
-              {(c.referidos||[]).map((r,i)=>{
+              {lst(c.referidos).length===0 && <div className="text-xs text-slate-400 italic">Sin referidos aún. Toca ✏️ Editar para agregar.</div>}
+              {lst(c.referidos).map((r,i)=>{
                 const refCard={
                   ...r,
                   id:`${c.id}::${i}`,
@@ -3616,14 +3637,14 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
                 };
                 const patchRef=(patch)=>setData(p=>p.map(anf=>{
                   if(anf.id!==c.id) return anf;
-                  const refs=[...(anf.referidos||[])];
+                  const refs=[...lst(anf.referidos)];
                   refs[i]={...refs[i],...patch};
                   return {...anf,referidos:refs};
                 }));
                 const saveHist=(entry)=>setData(p=>p.map(anf=>{
                   if(anf.id!==c.id) return anf;
-                  const refs=[...(anf.referidos||[])];
-                  refs[i]={...refs[i],historial:[...(refs[i].historial||[]),entry]};
+                  const refs=[...lst(anf.referidos)];
+                  refs[i]={...refs[i],historial:[...lst(refs[i].historial),entry]};
                   return {...anf,referidos:refs};
                 }));
                 return (
@@ -4027,7 +4048,7 @@ function Dashboard({ allData, appts, setAppts, callLog, agente, goTo, incentivos
   const conteoLlam = useMemo(()=>conteoLlamadas(allData, callLog), [allData, callLog]);
   const callsToday = sumDia(conteoLlam[todayStr]);
   const enHoy=(f)=>diaLocal(f)===todayStr;
-  const flatHistHoy=[...flat, ...(allData.referidos||[]), ...(allData.referidos||[]).flatMap(r=>r.referidos||[])];
+  const flatHistHoy=[...flat, ...(allData.referidos||[]), ...(allData.referidos||[]).flatMap(r=>lst(r.referidos))];
   const ventasHoy = contarVentasDemos({ appts, clientes:flatHistHoy, enP:enHoy }).ventas;
 
   // ── Datos auxiliares del dashboard ──
@@ -4079,7 +4100,7 @@ function Dashboard({ allData, appts, setAppts, callLog, agente, goTo, incentivos
   const nAgg=noElim(allData.agregados).length;
   const nPros=noElim(allData.prospectos).length;
   const nDist=noElim(allData.distribucion).length;
-  const nRef=noElim(allData.referidos).reduce((a,anf)=>a+(anf.referidos||[]).length,0);
+  const nRef=noElim(allData.referidos).reduce((a,anf)=>a+lst(anf.referidos).length,0);
   const totalDatos=nAgg+nPros+nDist+nRef;
   const kpis=[
     {label:"Llamadas hoy", value:callsToday, icon:"📞", helper:"Actividad registrada hoy"},
@@ -4367,7 +4388,7 @@ function Stats({ data, callLog, appts }) {
 
   // Lista de meses disponibles (de los datos creados + historial + hoy)
   const mesesSet=new Set([mesSel]);
-  flat.forEach(c=>{ if(c.creado) mesesSet.add(c.creado.slice(0,7)); (c.historial||[]).forEach(h=>{ if(h.fecha) mesesSet.add(h.fecha.slice(0,7)); }); });
+  flat.forEach(c=>{ if(c.creado) mesesSet.add(c.creado.slice(0,7)); lst(c.historial).forEach(h=>{ if(h.fecha) mesesSet.add(h.fecha.slice(0,7)); }); });
   (appts||[]).forEach(a=>{ if(a.fecha) mesesSet.add(a.fecha.slice(0,7)); });
   const meses=[...mesesSet].sort().reverse();
   const mesLabel=(m)=>{ const [y,mo]=m.split("-"); return new Date(+y,+mo-1,1).toLocaleDateString("es-MX",{month:"long",year:"numeric"}); };
@@ -4379,7 +4400,7 @@ function Stats({ data, callLog, appts }) {
   // Citas del mes (de appts agendadas en el mes)
   const citasMes=(appts||[]).filter(a=>enMes(a.fecha));
   // Ventas del mes (resultado venta registrado en historial del mes, o cita con resultado venta en el mes)
-  const flatHist=[...flat, ...(data.referidos||[]).flatMap(r=>r.referidos||[])];
+  const flatHist=[...flat, ...(data.referidos||[]).flatMap(r=>lst(r.referidos))];
   // Conteo unificado (igual que el panel y la pestaña Llamadas)
   const conteoLlam=conteoLlamadas(data, callLog);
   const llamadasMes=Object.entries(conteoLlam).filter(([k])=>k.slice(0,7)===mesSel).reduce((a,[,v])=>a+sumDia(v),0);
@@ -4487,9 +4508,9 @@ function Stats({ data, callLog, appts }) {
             <div className="space-y-3">{groups.map(g=>{
               const esRef = g.key==="referidos";
               const cards = g.arr||[];
-              const clientesG = esRef ? [...cards, ...cards.flatMap(a=>a.referidos||[])] : cards;
+              const clientesG = esRef ? [...cards, ...cards.flatMap(a=>lst(a.referidos))] : cards;
               const datos = esRef
-                ? cards.reduce((n,anf)=> n + (anf.eliminado?0:(anf.referidos||[]).filter(r=>enMes(r.creado||anf.creado)).length), 0)
+                ? cards.reduce((n,anf)=> n + (anf.eliminado?0:lst(anf.referidos).filter(r=>enMes(r.creado||anf.creado)).length), 0)
                 : cards.filter(c=>!c.eliminado && enMes(c.creado)).length;
               const vd = contarVentasDemos({ clientes:clientesG, enP:enMes });
               return (
@@ -4508,7 +4529,7 @@ function Stats({ data, callLog, appts }) {
             {(()=>{
               const ag="Agente de llamadas";
               let llamadas=0, ventas=0;
-              flat.forEach(c=>(c.historial||[]).forEach(h=>{ if(h.agente===ag&&enMes(h.fecha)){ if(h.tipo==="llamada")llamadas++; if(h.cita_resultado==="demo_venta"||h.cita_resultado==="venta")ventas++; } }));
+              flat.forEach(c=>lst(c.historial).forEach(h=>{ if(h.agente===ag&&enMes(h.fecha)){ if(h.tipo==="llamada")llamadas++; if(h.cita_resultado==="demo_venta"||h.cita_resultado==="venta")ventas++; } }));
               const citas=citasMes.filter(a=>a.asignado_a===ag||true).length>=0?citasMes.length:0;
               const tasa=llamadas>0?Math.round((totalCitasMes/llamadas)*100):0;
               return (
@@ -4996,7 +5017,7 @@ function flattenReferidos(referidosArr) {
     // (evita ids rotos tipo "undefined::0" que luego no se pueden abrir).
     const anfId = anf?.id;
     if(anfId===undefined || anfId===null || anfId==="") return;
-    (anf.referidos||[]).forEach((r,idx)=>{
+    lst(anf.referidos).forEach((r,idx)=>{
       out.push({
         ...r,
         id: `${anfId}::${idx}`,
@@ -5125,7 +5146,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
   const updateReferido=(refDe,refIdx,patch)=>{
     setData("referidos", p=>p.map(anf=>{
       if(anf.id!==refDe) return anf;
-      const refs=[...(anf.referidos||[])];
+      const refs=[...lst(anf.referidos)];
       refs[refIdx]={...refs[refIdx],...patch};
       // Contar citas (verde) y ventas de los referidos de este anfitrión
       const citas=refs.filter(r=>r.estado==="verde").length;
@@ -5159,8 +5180,8 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
       const [refDe,refIdx]=id.split("::");
       setData("referidos", p=>p.map(anf=>{
         if(anf.id!==refDe) return anf;
-        const refs=[...(anf.referidos||[])];
-        refs[refIdx]={...refs[refIdx], historial:[...(refs[refIdx].historial||[]), entry]};
+        const refs=[...lst(anf.referidos)];
+        refs[refIdx]={...refs[refIdx], historial:[...lst(refs[refIdx].historial), entry]};
         return {...anf, referidos:refs};
       }));
     } else {
@@ -5174,7 +5195,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
       const [refDe,refIdx]=id.split("::");
       setData("referidos", p=>p.map(anf=>{
         if(anf.id!==refDe) return anf;
-        const refs=[...(anf.referidos||[])];
+        const refs=[...lst(anf.referidos)];
         refs[refIdx]={...refs[refIdx], ultimo_llamado:ahora};
         return {...anf, referidos:refs};
       }));
@@ -5187,7 +5208,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
       const [refDe,refIdx]=id.split("::");
       setData("referidos", p=>p.map(anf=>{
         if(anf.id!==refDe) return anf;
-        const refs=[...(anf.referidos||[])];
+        const refs=[...lst(anf.referidos)];
         refs[refIdx]=agregarNota(refs[refIdx], texto, agente);
         return {...anf, referidos:refs};
       }));
@@ -5201,8 +5222,8 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
       const [refDe,refIdx]=id.split("::");
       setData("referidos", p=>p.map(anf=>{
         if(anf.id!==refDe) return anf;
-        const refs=[...(anf.referidos||[])];
-        refs[refIdx]={...refs[refIdx], historial:(refs[refIdx].historial||[]).filter(h=>(h.id||h.fecha)!==entryKey)};
+        const refs=[...lst(anf.referidos)];
+        refs[refIdx]={...refs[refIdx], historial:lst(refs[refIdx].historial).filter(h=>(h.id||h.fecha)!==entryKey)};
         return {...anf, referidos:refs};
       }));
     } else {
@@ -5245,7 +5266,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
         if(appt.notas && appt.notas.trim()){
           const notaCita=`[Cita ${appt.tipo||"cita"} ${(appt.fecha||"").slice(0,10)}] ${appt.notas.trim()}`;
           upd.ultimaNota=notaCita;
-          upd.notas=[...(upd.notas||[]),{texto:notaCita,fecha:new Date().toISOString(),agente:appt.agente||agente}];
+          upd.notas=[...notasLst(upd.notas),{texto:notaCita,fecha:new Date().toISOString(),agente:appt.agente||agente}];
         }
         if(["llamada","seguimiento","reset"].includes(appt.tipo) && appt.fecha)
           upd.proximo_seguimiento=(appt.fecha||"").slice(0,10);
@@ -5257,7 +5278,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
         const [refDe,refIdx]=sc.id.split("::");
         setData("referidos",p=>p.map(anf=>{
           if(anf.id!==refDe) return anf;
-          const refs=[...(anf.referidos||[])];
+          const refs=[...lst(anf.referidos)];
           refs[+refIdx]=actualizarCliente([refs[+refIdx]])[0];
           return {...anf,referidos:refs};
         }));
@@ -5306,10 +5327,10 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts 
       if(soloHoy && diaLocal(h.fecha)!==hoyStr) return;
       out.push({nombre, fuente, anfitrion, estado:h.estado, notas:h.notas, fecha:h.fecha, agente:h.agente, tipo:h.tipo});
     };
-    (data.agregados||[]).forEach(c=>(c.historial||[]).forEach(h=>push(c.nombre,"agregados",h)));
-    (data.prospectos||[]).forEach(c=>(c.historial||[]).forEach(h=>push(c.nombre,"prospectos",h)));
-    (data.distribucion||[]).forEach(c=>(c.historial||[]).forEach(h=>push(c.nombre,"distribucion",h)));
-    (data.referidos||[]).forEach(anf=>(anf.referidos||[]).forEach(r=>(r.historial||[]).forEach(h=>push(r.nombre,"referidos",h,anf.anfitrion))));
+    (data.agregados||[]).forEach(c=>lst(c.historial).forEach(h=>push(c.nombre,"agregados",h)));
+    (data.prospectos||[]).forEach(c=>lst(c.historial).forEach(h=>push(c.nombre,"prospectos",h)));
+    (data.distribucion||[]).forEach(c=>lst(c.historial).forEach(h=>push(c.nombre,"distribucion",h)));
+    (data.referidos||[]).forEach(anf=>lst(anf.referidos).forEach(r=>lst(r.historial).forEach(h=>push(r.nombre,"referidos",h,anf.anfitrion))));
     // Más recientes primero
     return out.sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
   };
@@ -5663,10 +5684,10 @@ function ReclStat({ label, semana, mes }) {
 // Tarjeta compacta de prospecto de reclutamiento (se expande al tocar; incluye nota)
 function RecruitCard({ r, onUpdate, onEdit, onDelete, onAgendar }) {
   const [open,setOpen]=useState(false);
-  const [nota,setNota]=useState(r.notas||"");
-  useEffect(()=>{ setNota(r.notas||""); },[r.notas]);
+  const [nota,setNota]=useState(notaTexto(r.notas)||"");
+  useEffect(()=>{ setNota(notaTexto(r.notas)||""); },[r.notas]);
   const rs=RECLU_RES_STYLE[r.resultado]||RECLU_RES_STYLE["Pendiente"];
-  const guardarNota=()=>{ if((nota||"")!==(r.notas||"")) onUpdate(r.id,{notas:nota}); };
+  const guardarNota=()=>{ if((nota||"")!==(notaTexto(r.notas)||"")) onUpdate(r.id,{notas:nota}); };
   return (
     <div className="bg-white rounded-xl border border-[#e8edf3] shadow-sm">
       {/* Fila compacta */}
@@ -5677,7 +5698,7 @@ function RecruitCard({ r, onUpdate, onEdit, onDelete, onAgendar }) {
         </div>
         {r.entrevistado && <span className="text-[11px] shrink-0" title="Entrevistado"><Ico e="✅" /></span>}
         {r.entrevista_agendada && <span className="text-[11px] shrink-0" title="Entrevista agendada"><Ico e="🗓" /></span>}
-        {(r.notas||"").trim() && <span className="text-[11px] shrink-0" title="Tiene nota"><Ico e="📝" /></span>}
+        {(notaTexto(r.notas)||"").trim() && <span className="text-[11px] shrink-0" title="Tiene nota"><Ico e="📝" /></span>}
         <span className="text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0" style={{background:rs.bg,color:rs.c}}>{r.resultado||"Pendiente"}</span>
         {r.telefono && <a onClick={e=>e.stopPropagation()} href={telLink(r.telefono)} className="w-8 h-8 flex items-center justify-center rounded-lg text-white text-sm shrink-0" style={{background:RP.blue}}><Ico e="📞" /></a>}
         {r.telefono && <a onClick={e=>e.stopPropagation()} href={waLinkReclu(r.telefono,r.nombre)} target="_blank" rel="noreferrer" className="w-8 h-8 flex items-center justify-center rounded-lg text-white text-sm shrink-0" style={{background:"#25D366"}}><Ico e="💬" /></a>}
@@ -6058,7 +6079,7 @@ function ControlActividad({ allData, appts, reclutamiento, cierres, onGuardarCie
     ...(allData.prospectos||[]),
     ...(allData.distribucion||[]),
     ...refs,
-    ...refs.flatMap(anf=>anf.referidos||[]),
+    ...refs.flatMap(anf=>lst(anf.referidos)),
   ];
 
   const calc = (enP)=>{
@@ -6077,7 +6098,7 @@ function ControlActividad({ allData, appts, reclutamiento, cierres, onGuardarCie
     datos += (allData.agregados||[]).filter(c=>!c.eliminado && enP(c.creado)).length;
     datos += (allData.prospectos||[]).filter(c=>!c.eliminado && enP(c.creado)).length;
     datos += (allData.distribucion||[]).filter(c=>!c.eliminado && enP(c.creado)).length;
-    refs.forEach(anf=>{ if(!anf.eliminado)(anf.referidos||[]).forEach(r=>{ if(enP(r.creado||anf.creado)) datos++; }); });
+    refs.forEach(anf=>{ if(!anf.eliminado)lst(anf.referidos).forEach(r=>{ if(enP(r.creado||anf.creado)) datos++; }); });
     // Prospectos socio (Reclutamiento) por fecha de subida
     const prospectosSocio = (reclutamiento||[]).filter(r=>enP(r.creado)).length;
     // Socio nuevo (Reclutamiento marcado "Nuevo socio") por fecha
@@ -6281,7 +6302,7 @@ function RefReviewModal({ records, onSave, onClose }) {
     anfitrion_cuenta: r.anfitrion_cuenta||"",
     anfitrion_detalle: r.anfitrion_detalle||"",
     estado:"sin_estado", venta:false, creado:new Date().toISOString(),
-    referidos:(r.referidos||[]).map(x=>({nombre:x.nombre||"",parentesco:x.parentesco||"",telefono:x.telefono||"",direccion:x.direccion||"",producto:x.producto||"",observaciones:x.observaciones||"",detalles:"",estado:"sin_estado",historial:[]})),
+    referidos:lst(r.referidos).map(x=>({nombre:x.nombre||"",parentesco:x.parentesco||"",telefono:x.telefono||"",direccion:x.direccion||"",producto:x.producto||"",observaciones:x.observaciones||"",detalles:"",estado:"sin_estado",historial:[]})),
   })));
 
   const setAnf=(ai,patch)=>setItems(p=>p.map((a,i)=>i===ai?{...a,...patch}:a));
@@ -6374,7 +6395,7 @@ function CumpleSection({ cumpleanos, setCumple, allData, agente, notify, puedeIm
     ...(allData?.agregados||[]),
     ...(allData?.prospectos||[]),
     ...(allData?.distribucion||[]),
-    ...((allData?.referidos||[]).flatMap(anf=>(anf.referidos||[]))),
+    ...((allData?.referidos||[]).flatMap(anf=>lst(anf.referidos))),
   ].filter(c=>!c.eliminado);
 
   // Normalizar para comparar (sin acentos, minúsculas, sin espacios extra)
@@ -6679,7 +6700,7 @@ function calcularRacha(inc, allData){
     ...(allData.agregados||[]),
     ...(allData.prospectos||[]),
     ...(allData.distribucion||[]),
-    ...((allData.referidos||[]).flatMap(anf=>(anf.referidos||[]))),
+    ...((allData.referidos||[]).flatMap(anf=>lst(anf.referidos))),
   ];
   const logroSemana={}; // idx -> {citas,demos,ventas}
   const acum=(idx,campo)=>{ if(!logroSemana[idx]) logroSemana[idx]={citas:0,demos:0,ventas:0}; logroSemana[idx][campo]++; };
@@ -6700,7 +6721,7 @@ function calcularRacha(inc, allData){
   });
   // Demos y ventas desde historial de clientes
   clientes.forEach(c=>{
-    (c.historial||[]).forEach(h=>{
+    lst(c.historial).forEach(h=>{
       const deAgente=!agente || h.agente===agente;
       if(!deAgente) return;
       const idx=idxDe(h.fecha);
@@ -6782,7 +6803,7 @@ function calcularProgresoIncentivo(inc, allData) {
     ...(allData.agregados||[]),
     ...(allData.prospectos||[]),
     ...(allData.distribucion||[]),
-    ...((allData.referidos||[]).flatMap(anf=>(anf.referidos||[]))),
+    ...((allData.referidos||[]).flatMap(anf=>lst(anf.referidos))),
   ];
   let citas=0;
   // Citas AGENDADAS (appts tipo "cita" del agente en el periodo)
@@ -6827,7 +6848,7 @@ function calcularProgresoIncentivo(inc, allData) {
   // Racha diaria: días consecutivos (hasta hoy) con al menos 1 actividad del agente
   const diasConActividad=new Set();
   clientes.forEach(c=>{
-    (c.historial||[]).forEach(h=>{
+    lst(c.historial).forEach(h=>{
       const deAgente = !agente || h.agente===agente;
       if(deAgente && h.fecha && enRango(h.fecha)) diasConActividad.add(new Date(h.fecha).toISOString().slice(0,10));
     });
@@ -7048,7 +7069,7 @@ function IncentivosCobranzaPanel({ metas, setMetas, cobranza }){
   const [form,setForm]=useState(null); // null | {id?,titulo,metaMonto,bono}
   const cobradoMes = (()=>{
     let t=0;
-    Object.values((cobranza||{}).clientesData||{}).forEach(c=>(c.historial||[]).forEach(h=>{
+    Object.values((cobranza||{}).clientesData||{}).forEach(c=>lst(c.historial).forEach(h=>{
       if(h.tipo==="pago" && String(h.fecha||"").startsWith(mesKey)) t += +h.monto||0;
     }));
     return +t.toFixed(2);
@@ -7518,7 +7539,7 @@ function recolectarParaRutas(allData) {
     });
   });
   (allData.referidos||[]).forEach(anf=>{
-    (anf.referidos||[]).forEach((r,i)=>{
+    lst(anf.referidos).forEach((r,i)=>{
       if(!(r.nombre&&r.nombre!=="(Referido sin nombre)")&&!r.telefono) return;
       out.push({
         id: `${anf.id}::${i}`, _tipo: "referidos", _origen: "referidos",
@@ -8292,7 +8313,12 @@ function FirebaseLoginScreen({ onGoogle, error, busy }) {
 
 // (El LoginScreen viejo de claves locales fue eliminado — el login es 100% Firebase.)
 
+// En modo v2 (solo prueba) la app va envuelta en un ErrorBoundary de diagnóstico.
+// En producción se renderiza AppRoot directo, igual que siempre.
 export default function App() {
+  return ACCESS_V2 ? <V2ErrorBoundary><AppRoot /></V2ErrorBoundary> : <AppRoot />;
+}
+function AppRoot() {
   const [tab,setTab]=useState("inicio");const [sideOpen,setSideOpen]=useState(false);const [showAI,setShowAI]=useState(false);const [showCSV,setShowCSV]=useState(false);
   const [dbOpen,setDbOpen]=useState(false); // grupo desplegable "Base de datos" en el menú lateral
   const role="admin"; // todos tienen acceso completo
@@ -8490,7 +8516,7 @@ export default function App() {
       }
       const patch={};
       if(grupo && encontradoId){
-        patch[grupo]=(s[grupo]||[]).map(c=>c.id===encontradoId?{...c, venta:true, resultado:"demo_venta", ultimo_monto_venta:monto||c.ultimo_monto_venta, ultimo_producto:appt.producto||c.ultimo_producto, ultimo_cartucho_meses:appt.cartucho_meses||c.ultimo_cartucho_meses, historial:[...(c.historial||[]), histEntry]}:c);
+        patch[grupo]=(s[grupo]||[]).map(c=>c.id===encontradoId?{...c, venta:true, resultado:"demo_venta", ultimo_monto_venta:monto||c.ultimo_monto_venta, ultimo_producto:appt.producto||c.ultimo_producto, ultimo_cartucho_meses:appt.cartucho_meses||c.ultimo_cartucho_meses, historial:[...lst(c.historial), histEntry]}:c);
       } else {
         const nuevo={ id:genId(), nombre:appt.nombre||"(Cliente de agenda)", telefono:appt.telefono||"", fuente:"Agenda", producto:appt.producto||"", ciudad:appt.ciudad||"", cp:"", direccion:appt.direccion||"", observaciones:"Venta agendada directo en Agenda", detalles:"", estado:"verde", venta:true, resultado:"demo_venta", ultimo_monto_venta:monto, ultimo_producto:appt.producto||"", ultimo_cartucho_meses:appt.cartucho_meses||0, ultimaNota:"", notas:[], historial:[histEntry], proximo_seguimiento:"", creado:new Date().toISOString(), actualizado:"", _origenAgenda:true };
         grupo="prospectos"; encontradoId=nuevo.id;
@@ -8654,9 +8680,9 @@ export default function App() {
   const guardarReferidos=(revisados)=>{
     // Limpiar anfitriones vacíos y referidos vacíos
     const limpios=revisados
-      .map(anf=>({...anf, referidos:(anf.referidos||[]).filter(r=>r.nombre?.trim()||r.telefono?.trim())}))
-      .filter(anf=>anf.anfitrion?.trim() || (anf.referidos||[]).length>0);
-    const totalRefs=limpios.reduce((a,anf)=>a+(anf.referidos||[]).length,0);
+      .map(anf=>({...anf, referidos:lst(anf.referidos).filter(r=>r.nombre?.trim()||r.telefono?.trim())}))
+      .filter(anf=>anf.anfitrion?.trim() || lst(anf.referidos).length>0);
+    const totalRefs=limpios.reduce((a,anf)=>a+lst(anf.referidos).length,0);
     if(limpios.length) setSection("referidos",p=>[...limpios,...p]);
     setImportMsg(`✅ ${limpios.length} anfitrión(es) · ${totalRefs} referido(s) guardado(s)`);
     if(limpios.length){
