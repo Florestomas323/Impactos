@@ -17,6 +17,28 @@ export type AssignmentEntry = {
   unassignedAt: string | null; unassignedBy: string | null; reason: string;
 };
 
+// ── Lectura segura de listas históricas ─────────────────────────────────────
+// Los datos viejos no siempre guardan historial/notas/referidos como array:
+// hay mapas {id: item}, textos sueltos y null. Estas funciones SOLO LEEN:
+// nunca modifican ni reemplazan el valor original del registro.
+export function asList(value: any): any[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return Object.values(value);
+  return [];
+}
+// Pares [clave, item]: en un mapa, la clave suele ser el id original del item.
+export function asEntries(value: any): Array<[string, any]> {
+  if (Array.isArray(value)) return value.map((v, i) => [String(i), v]);
+  if (value && typeof value === "object") return Object.entries(value);
+  return [];
+}
+// Tipo real para los avisos: "array", "object", "string", "number", "boolean", "null", "undefined".
+export function shapeOf(value: any): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
 const ESTADOS_NO_CONTESTO = ["naranja", "buzon"];
 const ESTADOS_BLOQUEO = ["numero_equivocado"];
 const esContacto = (h: any) => !!h && (h.tipo === "llamada" || h.tipo === "estado" || h.tipo === "cita");
@@ -24,10 +46,13 @@ const esContacto = (h: any) => !!h && (h.tipo === "llamada" || h.tipo === "estad
 // Fecha ISO del último contacto real (historial o notas). "" si nunca.
 export function lastContactAt(rec: any): string {
   let max = "";
-  (rec?.historial || []).forEach((h: any) => { if (esContacto(h) && String(h.fecha || "") > max) max = String(h.fecha); });
-  (rec?.notas || []).forEach((n: any) => { if (n && String(n.fecha || "") > max) max = String(n.fecha); });
+  asList(rec?.historial).forEach((h: any) => { if (esContacto(h) && String(h.fecha || "") > max) max = String(h.fecha); });
+  asList(rec?.notas).forEach((n: any) => { if (n && typeof n === "object" && String(n.fecha || "") > max) max = String(n.fecha); });
   // referidos: el contacto vive dentro de cada referido del anfitrión
-  (rec?.referidos || []).forEach((r: any) => { const f = lastContactAt(r); if (f > max) max = f; });
+  asList(rec?.referidos).forEach((r: any) => {
+    if (!r || typeof r !== "object") return;
+    const f = lastContactAt(r); if (f > max) max = f;
+  });
   return max;
 }
 export function daysSinceContact(rec: any, now: Date = new Date()): number | null {
@@ -95,7 +120,7 @@ export function matchesFilters(rec: any, f: AssignFilters = {}, now: Date = new 
 
 // Devuelve los primeros `cantidad` registros que cumplen (más antiguos sin contacto primero).
 export function selectForAssignment(records: any[], f: AssignFilters, cantidad: number, now: Date = new Date()): any[] {
-  const ok = (records || []).filter((r) => matchesFilters(r, f, now));
+  const ok = asList(records).filter((r) => matchesFilters(r, f, now));
   ok.sort((a, b) => lastContactAt(a).localeCompare(lastContactAt(b)));
   return cantidad > 0 ? ok.slice(0, cantidad) : ok;
 }
@@ -109,7 +134,7 @@ export type AssignOpts = {
 export type AssignResult = { record: any; changed: boolean; error: string };
 
 function closeOpenEntries(hist: AssignmentEntry[], byUid: string, iso: string, reason: string): AssignmentEntry[] {
-  return (hist || []).map((e) => (e && !e.unassignedAt ? { ...e, unassignedAt: iso, unassignedBy: byUid, reason: e.reason || reason } : e));
+  return asList(hist).map((e) => (e && !e.unassignedAt ? { ...e, unassignedAt: iso, unassignedBy: byUid, reason: e.reason || reason } : e));
 }
 
 export function assignRecord(rec: any, o: AssignOpts): AssignResult {
@@ -157,7 +182,7 @@ export function unassignRecord(rec: any, o: { byUid: string; reason?: string; no
 // Asignación masiva. Devuelve SOLO los registros que cambiaron (para escribirlos por lotes).
 export function bulkAssign(records: any[], o: AssignOpts): { changed: any[]; skipped: Array<{ id: string; error: string }> } {
   const changed: any[] = []; const skipped: Array<{ id: string; error: string }> = [];
-  (records || []).forEach((r) => {
+  asList(records).forEach((r) => {
     const res = assignRecord(r, o);
     if (res.changed) changed.push(res.record);
     else if (res.error) skipped.push({ id: r?.id, error: res.error });
@@ -174,10 +199,10 @@ export const onlyAssignmentChanged = (before: any, after: any) => changedKeys(be
 
 // Carga de trabajo por telemarketing.
 export function workload(records: any[], appts: any[], uid: string, nombre: string) {
-  const mios = (records || []).filter((r) => r && r.assignedTo === uid && !r.eliminado);
+  const mios = asList(records).filter((r) => r && r.assignedTo === uid && !r.eliminado);
   const trabajadoDesdeAsignacion = (r: any) => !!r.assignedAt && lastContactAt(r) >= r.assignedAt;
   const trabajados = mios.filter(trabajadoDesdeAsignacion).length;
-  const citas = (appts || []).filter((a) => a && !a.eliminado && (a.createdByUid === uid || a.assignedTo === uid || a.agente === nombre)).length;
+  const citas = asList(appts).filter((a) => a && !a.eliminado && (a.createdByUid === uid || a.assignedTo === uid || a.agente === nombre)).length;
   let ultima = "";
   mios.forEach((r) => { const f = lastContactAt(r); if (f > ultima) ultima = f; });
   return {
