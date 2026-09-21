@@ -3,7 +3,16 @@ import { Ico, Msg, sinEmoji } from "./iconos";
 import * as LU from "lucide-react";
 import { RP, SERIF, SANS } from "./theme";
 import { inpLight, PrimaryBtn, Modal, Field } from "./components/primitives";
-import { ROLES_APP, normalizarRol, PERMISOS_ROL, puedeVerTabRol, puedeExportarRol, puedeCrearIncentivosRol } from "./auth/permissions";
+import { ROLES_APP, normalizarRol, PERMISOS_ROL } from "./auth/legacyPermissions";
+// ── Acceso v2 (apagado en producción hasta la Entrega 4; ver src/config/flags.ts) ──
+import { ACCESS_V2, APP_ID, firebaseConfigOverride } from "./config/flags";
+import { canDo, canTab, setViewer } from "./auth/access";
+import { ROLE_LABEL, ROLE_SPECIALTY } from "./auth/roles";
+import { resolveAccess, watchProfile, touchLastActive, purgeLocalData } from "./auth/userAccess";
+import { useV2Store, prepareDbV2 } from "./data/store";
+import { UserManagement } from "./components/users/UserManagement";
+import { AccessScreen } from "./components/users/AccessScreen";
+import { AssignmentManager } from "./components/assignments/AssignmentManager";
 import { CUENTA_ROOT, CUENTA_ROOT_DATOS, SEMILLA_CUENTAS, CUENTAS_DINAMICAS, setCuentasDinamicas, todasLasCuentas, cuentaAutorizada, cuentaDeEmail } from "./auth/accounts";
 import { unirHistorial } from "./utils/history";
 import { genId } from "./utils/ids";
@@ -18,7 +27,7 @@ import { BuscadorCodigos, SimuladorCompra } from "./modules/catalog/CatalogModul
 // ─── FIREBASE CONFIG ──────────────────────────────────────────
 // Proyecto: actividad-royal-prestige (tu Firebase existente)
 // Colección exclusiva — no toca tu app de actividad anterior
-const FIREBASE_CONFIG = {
+const FIREBASE_CONFIG = firebaseConfigOverride() || {
   apiKey:            "AIzaSyAbUP9Atr0yVJ14vrpZwoDBxyZyT5B0pRw",
   authDomain:        "actividad-royal-prestige.firebaseapp.com",
   projectId:         "actividad-royal-prestige",
@@ -1437,7 +1446,7 @@ function CofreNivelEditor({ nivel, onChange, onClose }){
 
 // Tarjeta de configuración del Cofre (dentro de Incentivos)
 function CofreConfigCard({ cofreConfig, setCofreConfig, rolActivo }){
-  const puede=puedeCrearIncentivosRol(rolActivo);
+  const puede=canDo("incentivos.manage");
   const fallback = ()=>({ activo:true, niveles:COFRE_NIVELES_DEFAULT.map(n=>({...n,premios:[]})) });
   const cfg = (cofreConfig && cofreConfig.niveles) ? cofreConfig : fallback();
   const [editId,setEditId]=useState(null);
@@ -1498,7 +1507,7 @@ function CofreConfigCard({ cofreConfig, setCofreConfig, rolActivo }){
 
 // Botón / recordatorio de Respaldo mensual (Inicio del distribuidor)
 function RespaldoBox({ allData, appts, callLog, respaldos, registrarRespaldo, rolActivo }){
-  const puede=puedeExportarRol(rolActivo); // Distribuidor y Supervisor
+  const puede=canDo("exportar"); // Distribuidor y Supervisor
   const [abierto,setAbierto]=useState(false);
   if(!puede) return null;
 
@@ -3351,7 +3360,7 @@ function ClientRow({ c, onStatusChange, onEdit, onSchedule, onDelete, onRestore,
 // ─── DB SECTION ───────────────────────────────────────────────
 function DBSection({ data, setData, type, title, onCallLog, role, allData, agente, notify, setAppts, rolActivo="", cobranzaClientes=null }) {
   // Exportar (CSV/PDF) solo para roles de gestión — NUNCA telemarketing/vendedor
-  const puedeExportar = puedeExportarRol(rolActivo);
+  const puedeExportar = canDo("exportar");
   const [search,setSearch]=useState("");const [filterStatus,setFilterStatus]=useState("todos");
   const [filterCity,setFilterCity]=useState("");const [filterCP,setFilterCP]=useState("");
   const [showRoute,setShowRoute]=useState(false);const [routeSel,setRouteSel]=useState([]);
@@ -6253,6 +6262,11 @@ function ControlActividad({ allData, appts, reclutamiento, cierres, onGuardarCie
 
 const NAV=[{id:"inicio",icon:"▦",label:"Centro de mando"},{id:"llamadas",icon:"📞",label:"Llamadas"},{id:"agenda",icon:"📅",label:"Agenda"},{id:"servicio",icon:"🔧",label:"Servicios"},{id:"agregados",icon:"📂",label:"Agregados"},{id:"referidos",icon:"🎁",label:"Referidos"},{id:"prospectos",icon:"🔍",label:"Prospección"},{id:"distribucion",icon:"🏠",label:"Distribución"},{id:"reclutamiento",icon:"🧲",label:"Reclutamiento"},{id:"cobranza",icon:"💵",label:"Cobranza"},{id:"catalogo",icon:"🔎",label:"Buscador de Códigos"},{id:"simulador",icon:"🧮",label:"Simulador de Compra"},{id:"rutas",icon:"🗺️",label:"Rutas"},{id:"cumpleanos",icon:"🎂",label:"Cumpleaños"},{id:"incentivo",icon:"🏆",label:"Incentivos"},{id:"control",icon:"📈",label:"Control de actividad"},{id:"stats",icon:"📊",label:"Estadísticas"},{id:"config",icon:"⚙️",label:"Configuración"}];
 
+// Pestañas del sistema nuevo (solo con VITE_ACCESS_V2=1).
+const NAV_ALL = ACCESS_V2
+  ? [...NAV.filter(n=>n.id!=="config"), {id:"asignaciones",icon:"🧩",label:"Distribución de datos"}, {id:"usuarios",icon:"👥",label:"Usuarios y permisos"}, ...NAV.filter(n=>n.id==="config")]
+  : NAV;
+
 // Las 4 secciones que se agrupan bajo la pestaña desplegable "Base de datos"
 const DB_TABS=["agregados","referidos","prospectos","distribucion"];
 
@@ -7179,7 +7193,7 @@ function IncentivoSection({ incentivos, setIncentivos, allData, agentes, notify,
   const [ajusteId,setAjusteId]=useState(null); // id del incentivo con ajuste abierto
   const [aj,setAj]=useState({citas:0,demos:0,ventas:0,valor:0});
   const [tab,setTab]=useState("normal"); // normal | racha | cofre
-  const puedeEditar=puedeCrearIncentivosRol(rolActivo);
+  const puedeEditar=canDo("incentivos.manage");
 
   const guardar=(inc)=>{
     if(editItem){
@@ -8056,7 +8070,9 @@ function ServicioSection({ appts, setAppts, agente, notify, allData }) {
 
 // ─── CONFIGURACIÓN — cambiar claves de acceso ─────────────────
 function ConfigSection({ agenteActivo, onCerrarSesion, rolActivo, emailActivo, cuentasCustom, onSaveCuentas, allData, onLimpiarSinTelefono, onExtraerCP, cumpleMsgTpl, onSaveCumpleMsg }) {
-  const esDistribuidor = normalizarRol(rolActivo)==="Distribuidor"; // solo el distribuidor gestiona usuarios
+  // Panel VIEJO de usuarios: solo en el sistema actual. En v2 se usa "Usuarios y permisos".
+  const esDistribuidor = canDo("usuarios.manage") && !ACCESS_V2;
+  const puedePlantillas = canDo("plantillas.edit");
   // ── Panel de usuarios: correo → nombre y rol (vive en Firebase, sin redesplegar) ──
   const [rNombre,setRNombre]=useState("");
   const [rEmail,setREmail]=useState("");
@@ -8150,8 +8166,14 @@ function ConfigSection({ agenteActivo, onCerrarSesion, rolActivo, emailActivo, c
         </div>
       </div>
       )}
+      {ACCESS_V2 && canDo("usuarios.manage") && (
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-[#e8edf3]">
+          <div className="text-base font-bold text-[#1f2d3d] mb-1">Usuarios y permisos</div>
+          <div className="text-sm text-slate-500">Invitar, cambiar roles, activar o desactivar usuarios se hace en la sección <b>Usuarios y permisos</b> del menú.</div>
+        </div>
+      )}
       {/* 🎂 MENSAJE DE CUMPLEAÑOS — editable, se sincroniza a todos los teléfonos */}
-      {esDistribuidor && (
+      {puedePlantillas && (
       <div className="bg-white rounded-2xl p-5 shadow-sm border border-[#e8edf3]">
         <div className="text-base font-bold text-[#1f2d3d] mb-1"><Ico e="🎂" className="mr-1.5" />Mensaje de cumpleaños</div>
         <div className="text-xs text-slate-400 mb-3">Este texto se envía con los botones 💬 WA y SMS de cumpleaños (panel y pestaña). Escribe <b>{"{nombre}"}</b> donde quieras que aparezca el primer nombre del cumpleañero.</div>
@@ -8173,7 +8195,7 @@ function ConfigSection({ agenteActivo, onCerrarSesion, rolActivo, emailActivo, c
           en la pantalla de entrada, y los usuarios se gestionan arriba. */}
 
       {/* Herramienta: limpiar registros sin teléfono (solo admin/distribuidor) */}
-      {(normalizarRol(rolActivo)==="Distribuidor"||normalizarRol(rolActivo)==="Supervisor") && (()=>{
+      {canDo("datos.herramientas") && (()=>{
         const sinTel=(arr)=>(allData?.[arr]||[]).filter(c=>!c.eliminado && (c.telefono||"").replace(/[^0-9]/g,"").length<10).length;
         const total=sinTel("agregados")+sinTel("prospectos")+sinTel("distribucion");
         return (
@@ -8193,7 +8215,7 @@ function ConfigSection({ agenteActivo, onCerrarSesion, rolActivo, emailActivo, c
       })()}
 
       {/* Herramienta: extraer código postal de la dirección a su casilla (solo admin/distribuidor) */}
-      {(normalizarRol(rolActivo)==="Distribuidor"||normalizarRol(rolActivo)==="Supervisor") && (()=>{
+      {canDo("datos.herramientas") && (()=>{
         // Cuenta registros que NO tienen cp en su casilla pero SÍ tienen un CP de 5 dígitos en la dirección
         const sinCP=(arr)=>(allData?.[arr]||[]).filter(c=>{
           if(c.eliminado) return false;
@@ -8291,7 +8313,41 @@ export default function App() {
 
   // El estado se carga para cualquier usuario autenticado en Firebase; la autorización
   // (fija o dinámica) se resuelve después, cuando ya tenemos state.cuentasCustom.
-  const [state,setState,synced,fbError,reintentarFb,hydrated]=useSharedState(authReady && !!authUser);
+  // ── Acceso v2: users/{uid} + invitaciones. En producción (ACCESS_V2 apagado) no corre. ──
+  const [v2Access,setV2Access]=useState(null);
+  const [v2Tick,setV2Tick]=useState(0);
+  useEffect(()=>{
+    if(!ACCESS_V2) return;
+    if(!authReady || !authUser){ setV2Access(null); return; }
+    let vivo=true; let unsub=null;
+    (async()=>{
+      const db=await getDB(); await prepareDbV2(db);
+      const r=await resolveAccess(db, authUser);
+      if(!vivo) return;
+      setV2Access(r);
+      if(r.status==="inactive") purgeLocalData();
+      if(r.status==="ok"){
+        touchLastActive(db, authUser.uid);
+        // Si el administrador lo desactiva, pierde el acceso en este mismo momento.
+        unsub=watchProfile(db, authUser.uid, (u)=>{
+          if(!vivo) return;
+          if(!u || u.status!=="active" ){ setV2Access({status:"inactive", user:u||{uid:authUser.uid}}); purgeLocalData(); }
+          else setV2Access({status:"ok", user:u});
+        });
+      }
+    })();
+    return ()=>{ vivo=false; if(unsub) unsub(); };
+  },[authReady, authUser?.uid, v2Tick]);
+  const v2User = ACCESS_V2 && v2Access?.status==="ok" ? v2Access.user : null;
+  const v2Defaults = useMemo(()=>({
+    callLog:{}, appts:[], cumpleanos:[], incentivos:[], rutas:[],
+    cofreConfig:{ activo:true, niveles:COFRE_NIVELES_DEFAULT.map(n=>({...n,premios:[]})) }, cofreAperturas:[],
+    reclutamiento:[], controlCierres:[], cumpleMsgTpl:""
+  }),[]);
+  // ACCESS_V2 es constante de compilación: siempre se llama el MISMO hook en cada render.
+  const [state,setState,synced,fbError,reintentarFb,hydrated]= ACCESS_V2
+    ? useV2Store(v2User, getDB, v2Defaults)
+    : useSharedState(authReady && !!authUser);
   // Sincroniza el mapa dinámico ANTES de resolver el rol (corre en cada render, es barato)
   setCuentasDinamicas(state?.cuentasCustom||[]);
   setCumpleMsgTpl(state?.cumpleMsgTpl||"");
@@ -8299,17 +8355,21 @@ export default function App() {
   // siembra con SEMILLA_CUENTAS. Corre una sola vez; después el panel manda. ──
   const semillaHecha=useRef(false);
   useEffect(()=>{
-    if(semillaHecha.current) return;
+    if(ACCESS_V2 || semillaHecha.current) return;
     if(!authReady || !authUser || !synced || !state) return;
     if((state.cuentasCustom||[]).length>0){ semillaHecha.current=true; return; }
     semillaHecha.current=true;
     setState(s=>((s.cuentasCustom||[]).length>0 ? s : {...s, cuentasCustom:SEMILLA_CUENTAS}));
   },[authReady, authUser, synced, state, setState]);
-  const emailOk=cuentaAutorizada(email);
-  const cuenta=cuentaDeEmail(email);
+  const emailOk = ACCESS_V2 ? !!v2User : cuentaAutorizada(email);
+  const cuenta = ACCESS_V2
+    ? { nombre: v2User?.nombre || email, rol: v2User ? `${ROLE_LABEL[v2User.role]||v2User.role}${["Ventas","Cobranza","Reclutamiento"].includes(ROLE_SPECIALTY[v2User.role]) ? " · "+ROLE_SPECIALTY[v2User.role] : ""}` : "" }
+    : cuentaDeEmail(email);
   const agenteActivo=cuenta.nombre;
   const rolUsuario=cuenta.rol;
-  const puedeGestionarIncentivos = puedeCrearIncentivosRol(rolUsuario);
+  // Punto ÚNICO de permisos: canDo()/canTab() leen esto (src/auth/access.ts).
+  setViewer(ACCESS_V2 ? { mode:"v2", user:v2User } : { mode:"legacy", legacyRole:rolUsuario });
+  const puedeGestionarIncentivos = canDo("incentivos.manage");
   const [showNotifs,setShowNotifs]=useState(false);
 
   const iniciarSesionGoogle=async()=>{
@@ -8439,7 +8499,7 @@ export default function App() {
   };
   const onCallLog=()=>{const today=hoyLocal();const ag=agenteActivo||"Equipo";setState(s=>{const dia=clObj((s.callLog||{})[today]);return {...s,callLog:{...(s.callLog||{}),[today]:{...dia,[ag]:(+dia[ag]||0)+1}}};});};
   // navegación rápida desde el dashboard
-  const goTo=(t)=>{ if(!puedeVerTabRol(rolUsuario,t)){ alert("🔒 Tu rol no tiene acceso a esa sección"); return; } setTab(t); setSideOpen(false); };
+  const goTo=(t)=>{ if(!canTab(t)){ alert("🔒 Tu rol no tiene acceso a esa sección"); return; } setTab(t); setSideOpen(false); };
   const setCofreConfig=(fn)=>setState(s=>({...s, cofreConfig: typeof fn==="function"? fn(s.cofreConfig||{activo:true,niveles:COFRE_NIVELES_DEFAULT.map(n=>({...n,premios:[]}))}) : fn }));
   const abrirCofre=(agente,nivel,premio)=>{
     const semana=lunesDeLaSemana(new Date()).toISOString().slice(0,10);
@@ -8621,7 +8681,7 @@ export default function App() {
     setTimeout(()=>setImportMsg(""),5000);
   };
 
-  const navLabel=NAV.find(n=>n.id===tab);
+  const navLabel=NAV_ALL.find(n=>n.id===tab);
   const total=allData.agregados.length+allData.referidos.length+allData.prospectos.length+allData.distribucion.length;
   // Badge llamadas: solo clientes SIN ESTADO (pendientes reales por llamar)
   const pendientes=[...allData.prospectos,...allData.agregados,...allData.distribucion].filter(c=>c.estado==="sin_estado").length;
@@ -8650,6 +8710,10 @@ export default function App() {
   // pintamos el shell al instante con esos datos y dejamos que Firebase termine
   // de sincronizar EN SEGUNDO PLANO (indicador discreto arriba). Solo bloqueamos
   // la entrada en el PRIMER acceso real, cuando todavía no hay ningún dato local.
+  // v2: sin perfil activo no se carga ningún dato.
+  if(ACCESS_V2 && authUser && !v2User){
+    return <AccessScreen access={v2Access} email={authUser.email} onSignOut={cerrarSesion} onRetry={()=>{ setV2Access(null); setV2Tick(t=>t+1); }} />;
+  }
   if(authUser && !synced && !hydrated){
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-[#F8FAFC]">
@@ -8698,7 +8762,7 @@ export default function App() {
       <aside className={`fixed top-0 left-0 h-full w-[86vw] max-w-[300px] lg:w-[252px] lg:max-w-none z-50 flex flex-col transition-transform duration-300 ${sideOpen?"translate-x-0":"-translate-x-full"} lg:translate-x-0 bg-[#080D16] border-r border-[#182231] shadow-2xl lg:shadow-none`}>
         <div className="px-4 py-4 border-b border-white/[0.07]"><Brand small /></div>
         <div className="flex-1 overflow-y-auto py-4 px-3">
-          {NAV.filter(n=>puedeVerTabRol(rolUsuario,n.id) && (n.id!=="incentivo"||puedeGestionarIncentivos)).map(n=>{
+          {NAV_ALL.filter(n=>canTab(n.id) && (n.id!=="incentivo"||puedeGestionarIncentivos)).map(n=>{
             const sectionLabel =
               n.id==="inicio" ? "Resumen" :
               n.id==="llamadas" ? "Operación" :
@@ -8726,7 +8790,7 @@ export default function App() {
                   </button>
                   {dbAbierto && (
                     <div className="mt-1.5 ml-4 pl-2 border-l border-white/[0.08] space-y-1">
-                      {NAV.filter(x=>DB_TABS.includes(x.id)).map(s=>(
+                      {NAV.filter(x=>DB_TABS.includes(x.id) && (!ACCESS_V2 || canTab(x.id))).map(s=>(
                         <button key={s.id} onClick={()=>{setTab(s.id);setSideOpen(false);}} className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[12px] font-semibold transition ${tab===s.id?"text-white bg-[#1E2B43]":"text-[#8F9AAD] hover:bg-white/[0.05] hover:text-white"}`}>
                           <Ico e={s.icon} size={14} />{s.label}
                         </button>
@@ -8804,7 +8868,7 @@ export default function App() {
             {tab==="distribucion" && <DBSection data={allData.distribucion} setData={fn=>setSection("distribucion",fn)} type="distribucion" title="Bajo Distribución" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} cobranzaClientes={(state.cobranza||{}).clientesData||{}} />}
             {tab==="reclutamiento" && <RecruitmentSection reclutamiento={state.reclutamiento||[]} setReclutamiento={(fn)=>setState(s=>({...s,reclutamiento:typeof fn==="function"?fn(s.reclutamiento||[]):fn}))} agente={agenteActivo} notify={notify} rolActivo={rolUsuario} setAppts={setAppts} socios={state.socios||[]} setSocios={fn=>setSection("socios",fn)} docsSocios={state.docsSocios||{}} setDocsSocios={fn=>setSection("docsSocios",fn)} />}
             {tab==="cobranza" && <CobranzaSection distribucion={(state.distribucion||[]).filter(c=>!c.eliminado)} cobranza={state.cobranza||{}} setCobranza={(fn)=>setSection("cobranza",fn)} />}
-            {tab==="catalogo" && <BuscadorCodigos catalogoCustom={state.catalogoCustom||{}} setCatalogoCustom={(fn)=>setState(st=>({...st,catalogoCustom:typeof fn==="function"?fn(st.catalogoCustom||{}):fn}))} puedeEditar={puedeExportarRol(rolUsuario)} />}
+            {tab==="catalogo" && <BuscadorCodigos catalogoCustom={state.catalogoCustom||{}} setCatalogoCustom={(fn)=>setState(st=>({...st,catalogoCustom:typeof fn==="function"?fn(st.catalogoCustom||{}):fn}))} puedeEditar={canDo("catalogo.edit")} />}
             {tab==="simulador" && <SimuladorCompra />}
             {tab==="rutas" && <RutasSection rutas={state.rutas||[]} setRutas={(fn)=>setState(s=>({...s,rutas:typeof fn==="function"?fn(s.rutas||[]):fn}))} allData={allData} agentes={AGENTES} agente={agenteActivo} notify={notify} />}
             {tab==="servicio" && <ServicioSection appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} notify={notify} allData={allData} />}
@@ -8815,6 +8879,10 @@ export default function App() {
               ? <IncentivosHub incentivos={state.incentivos||[]} setIncentivos={(fn)=>setState(s=>({...s,incentivos:typeof fn==="function"?fn(s.incentivos||[]):fn}))} allData={allData} agentes={AGENTES} notify={notify} rolActivo={rolUsuario} agenteActivo={agenteActivo} cofreConfig={state.cofreConfig} setCofreConfig={setCofreConfig} incentivosCobranza={state.incentivosCobranza||[]} setIncentivosCobranza={(fn)=>setState(s=>({...s,incentivosCobranza:typeof fn==="function"?fn(s.incentivosCobranza||[]):fn}))} incentivosReclut={state.incentivosReclut||[]} setIncentivosReclut={(fn)=>setState(s=>({...s,incentivosReclut:typeof fn==="function"?fn(s.incentivosReclut||[]):fn}))} cobranza={state.cobranza||{}} socios={state.socios||[]} reclutamiento={state.reclutamiento||[]} />
               : <div className="bg-white rounded-2xl p-8 text-center shadow-sm border border-[#e8edf3]"><div className="mb-2 flex justify-center"><Ico e="🔒" size={36} strokeWidth={1.25} className="opacity-40" /></div><div className="text-sm text-slate-500 font-bold">Solo el administrador o distribuidor encargado puede gestionar incentivos.</div><div className="text-xs text-slate-400 mt-1">Tu progreso aparece en tu pantalla de Inicio.</div></div>
             )}
+            {ACCESS_V2 && v2User && tab==="usuarios" && canTab("usuarios") && <UserManagement me={v2User} getDB={getDB} getIdToken={async()=>{ const a=await getAuth(); return a.currentUser.getIdToken(); }}
+              assignedCount={(uid)=>[...["agregados","referidos","prospectos","distribucion","reclutamiento"].flatMap(k=>Array.isArray(state[k])?state[k]:[]), ...Object.values(state?.cobranza?.clientesData||{})].filter(r=>r&&r.assignedTo===uid).length}
+              notify={(m)=>notify("datos","👥 Usuarios",m,"Usuarios")} goToAsignaciones={()=>goTo("asignaciones")} />}
+            {ACCESS_V2 && v2User && tab==="asignaciones" && canTab("asignaciones") && <AssignmentManager me={v2User} getDB={getDB} state={state} notify={(m)=>notify("datos","🧩 Distribución de datos",m,"Equipo")} />}
             {tab==="config" && <ConfigSection agenteActivo={agenteActivo} onCerrarSesion={cerrarSesion} rolActivo={rolUsuario} emailActivo={email} cumpleMsgTpl={state.cumpleMsgTpl||""} onSaveCumpleMsg={(t)=>setState(s=>({...s,cumpleMsgTpl:t}))} cuentasCustom={state.cuentasCustom||[]} onSaveCuentas={(u)=>setState(s=>({...s,cuentasCustom:typeof u==="function"?u(s.cuentasCustom||[]):u}))} allData={allData} onLimpiarSinTelefono={()=>{
               const sinTel=(arr)=>(arr||[]).filter(c=>!c.eliminado && soloDigitos(c.telefono).length<10).length;
               const totalSinTel=sinTel(state.agregados)+sinTel(state.prospectos)+sinTel(state.distribucion);
