@@ -1,1 +1,98 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# SIMULACIÓN DE MIGRACIÓN — ImpactOS Acceso v2
+#
+# Solo se ejecuta A MANO (workflow_dispatch) y solo en modo --dry.
+# NO escribe en Firestore, NO publica Rules ni índices, NO despliega a Vercel,
+# NO toca crm_telemarketing y NO cambia el funcionamiento de la app.
+# El JSON de la cuenta de servicio NUNCA vive en el repo: llega por GitHub
+# Secret y se escribe en un archivo temporal del runner, que se destruye al
+# terminar el trabajo.
+# ═══════════════════════════════════════════════════════════════════════════
+name: Migración — simulación (dry run)
 
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "appId / workspace a simular"
+        required: true
+        default: "impactos"
+
+permissions:
+  contents: read          # solo lectura: el workflow no puede escribir en el repo
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Rama
+        run: |
+          echo "Rama ${{ github.ref_name }} - modo SIMULACION (--dry), cero escrituras."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar dependencias
+        run: |
+          npm install --no-audit --no-fund
+          npm install firebase-admin --no-audit --no-fund
+
+      - name: Compilar la lógica del migrador
+        run: |
+          npx esbuild src/services/migration.ts \
+            --bundle --platform=node --format=esm \
+            --outfile=dist-migration/migration.js
+
+      - name: Escribir la credencial fuera del repo
+        env:
+          SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_IMPACTOS }}
+        run: |
+          if [ -z "$SA_JSON" ]; then
+            echo "Falta el secret FIREBASE_SERVICE_ACCOUNT_IMPACTOS."
+            exit 1
+          fi
+          # RUNNER_TEMP está FUERA del checkout: el JSON nunca puede acabar en un commit.
+          printf '%s' "$SA_JSON" > "$RUNNER_TEMP/sa.json"
+          chmod 600 "$RUNNER_TEMP/sa.json"
+          node -e "JSON.parse(require('fs').readFileSync(process.env.RUNNER_TEMP+'/sa.json','utf8'))" \
+            || { echo "El secret no es un JSON válido."; exit 1; }
+
+      - name: Simulación (--dry, cero escrituras)
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
+        run: |
+          set -o pipefail
+          node scripts/migrate.mjs --app "${{ inputs.app }}" --dry 2>&1 | tee salida-dry-run.txt
+
+      - name: Verificar que el reporte cuadra
+        run: |
+          F="reporte-migracion-${{ inputs.app }}.txt"
+          test -f "$F" || { echo "No se generó el reporte."; exit 1; }
+          grep -q "RESULTADO: OK" "$F" || { echo "El reporte NO cuadra:"; cat "$F"; exit 1; }
+          echo "Reporte OK."
+
+      - name: Mostrar qué archivos quedaron en el runner
+        if: always()
+        run: |
+          echo "Archivos generados (viven solo en el runner, no se suben al repo):"
+          git status --porcelain
+
+      - name: Subir el reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-migracion-${{ inputs.app }}
+          path: |
+            reporte-migracion-*.txt
+            salida-dry-run.txt
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Borrar la credencial
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"
