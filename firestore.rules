@@ -1,0 +1,171 @@
+rules_version = '2';
+// ═══════════════════════════════════════════════════════════════════════════
+// ImpactOS — Firestore Rules v2   (PREPARADAS, NO PUBLICADAS en producción)
+//
+// • Cero correos escritos aquí: todo se valida contra users/{uid},
+//   invitations/{email} y workspaces/{appId}.
+// • Invitaciones, roles, estados, cupos y cambios de app los escribe SOLO el
+//   servidor (/api/users con firebase-admin, que no pasa por estas reglas).
+//   Desde un teléfono nadie puede crearse un rol ni saltarse un cupo.
+// • El Súper Admin se crea UNA vez a mano; ninguna regla permite crear otro.
+// • crm_telemarketing queda congelado como respaldo.
+// ═══════════════════════════════════════════════════════════════════════════
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Identidad ─────────────────────────────────────────────────────────
+    function signedIn()  { return request.auth != null; }
+    function uid()       { return request.auth.uid; }
+    function myEmail()   { return request.auth.token.email.lower(); }
+    function verified()  { return request.auth.token.email_verified == true; }
+    function userPath(u) { return /databases/$(database)/documents/users/$(u); }
+    function invPath(e)  { return /databases/$(database)/documents/invitations/$(e); }
+
+    function me()         { return get(userPath(uid())).data; }
+    // Activo = existe users/{uid} Y status == 'active'. inactive/suspended pierden todo al instante.
+    function active()     { return signedIn() && exists(userPath(uid())) && me().status == 'active'; }
+    function isSuper()    { return active() && me().role == 'super_admin'; }
+    function inApp(a)     { return active() && me().appId == a; }
+    function isStaffOf(a) { return inApp(a) && me().role in ['distribuidor', 'supervisor']; }
+    function isDistOf(a)  { return inApp(a) && me().role == 'distribuidor'; }
+    function staffOrSuper(a) { return isSuper() || isStaffOf(a); }
+
+    function validRole(r) {
+      return r in ['distribuidor', 'supervisor', 'telemarketing_ventas',
+                   'telemarketing_cobranza', 'telemarketing_reclutamiento'];
+    }
+
+    // ── USUARIOS ──────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow get: if signedIn() && (userId == uid() || isSuper()
+        || (active() && me().role in ['distribuidor', 'supervisor'] && resource.data.appId == me().appId));
+      allow list: if isSuper()
+        || (active() && me().role in ['distribuidor', 'supervisor'] && resource.data.appId == me().appId);
+
+      // Única forma de nacer desde la app: aceptar TU invitación con TU Google.
+      allow create: if signedIn() && verified() && userId == uid()
+        && exists(invPath(myEmail()))
+        && get(invPath(myEmail())).data.status == 'invited'
+        && request.resource.data.role == get(invPath(myEmail())).data.role
+        && request.resource.data.appId == get(invPath(myEmail())).data.appId
+        && validRole(request.resource.data.role)
+        && request.resource.data.status == 'active'
+        && request.resource.data.emailNormalized == myEmail()
+        && getAfter(invPath(myEmail())).data.status == 'accepted'
+        && getAfter(invPath(myEmail())).data.acceptedUid == uid();
+
+      // Uno mismo: solo su "última actividad". Todo lo demás: servidor.
+      allow update: if active() && userId == uid()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt']);
+      allow delete: if false;
+    }
+
+    // ── INVITACIONES (id = correo en minúsculas) ──────────────────────────
+    match /invitations/{email} {
+      allow get: if signedIn() && (email == myEmail() || isSuper()
+        || (resource != null && isStaffOf(resource.data.appId)));
+      allow list: if isSuper() || isStaffOf(resource.data.appId);
+      allow create, delete: if false;             // solo el servidor
+      // El invitado la acepta en el MISMO lote en que nace su perfil.
+      allow update: if signedIn() && verified() && email == myEmail()
+        && resource.data.status == 'invited'
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.acceptedUid == uid()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedUid', 'acceptedAt'])
+        && existsAfter(userPath(uid()));
+    }
+
+    // ── APPS / WORKSPACES ─────────────────────────────────────────────────
+    match /workspaces/{appId} {
+      allow read:   if isSuper() || inApp(appId);
+      allow create, delete: if false;             // servidor / consola
+      // counts y limits: solo el servidor. El Súper Admin edita el resto.
+      allow update: if isSuper()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['counts', 'limits']);
+
+      // ── REGISTROS: un documento por cliente / prospecto / cuenta ─────────
+      // La sección es un CAMPO. El telemarketing consulta con
+      // assignedTo == su uid Y section == una de las suyas: así cada consulta
+      // es verificable completa por estas reglas.
+      match /records/{recId} {
+        function validSection(x) {
+          return x in ['agregados', 'referidos', 'prospectos', 'distribucion', 'cobranza', 'reclutamiento'];
+        }
+        // Mismo mapa que src/data/schema.ts (SECTIONS_FOR_ROLE).
+        function sectionAllowed(r, x) {
+          return (r == 'telemarketing_ventas'        && x in ['agregados', 'referidos', 'prospectos'])
+              || (r == 'telemarketing_cobranza'      && x in ['cobranza', 'distribucion'])
+              || (r == 'telemarketing_reclutamiento' && x in ['reclutamiento']);
+        }
+        function tmOn(x) { return inApp(appId) && sectionAllowed(me().role, x); }
+        // Un telemarketing jamás toca responsable, historial de asignación ni origen.
+        function assignmentUntouched() {
+          return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'appId', 'section', 'assignedTo', 'assignedToName', 'assignedBy', 'assignedAt',
+            'lastAssignedAt', 'assignmentType', 'assignmentStatus', 'assignmentHistory',
+            'workStatus', 'asignado_a', 'legacyId', 'legacySource', 'createdByUid']);
+        }
+
+        allow read: if staffOrSuper(appId)
+          || (tmOn(resource.data.section) && resource.data.assignedTo == uid());
+
+        allow create: if request.resource.data.appId == appId && validSection(request.resource.data.section)
+          && (staffOrSuper(appId)
+              || (tmOn(request.resource.data.section)
+                  && request.resource.data.assignedTo == uid()
+                  && request.resource.data.createdByUid == uid()));
+
+        allow update: if request.resource.data.appId == appId
+          && validSection(request.resource.data.section)
+          && (staffOrSuper(appId)
+              || (tmOn(resource.data.section) && resource.data.assignedTo == uid() && assignmentUntouched()));
+
+        // Borrado físico: Distribuidor o Súper Admin. La papelera es eliminado=true.
+        allow delete: if isSuper() || isDistOf(appId);
+      }
+
+      // ── AGENDA ────────────────────────────────────────────────────────────
+      match /appts/{apptId} {
+        function mine(d) { return d.get('assignedTo', null) == uid() || d.get('createdByUid', null) == uid(); }
+        allow read:   if staffOrSuper(appId) || (inApp(appId) && mine(resource.data));
+        allow create: if request.resource.data.appId == appId
+          && (staffOrSuper(appId) || (inApp(appId) && request.resource.data.createdByUid == uid()));
+        allow update: if request.resource.data.appId == appId
+          && (staffOrSuper(appId)
+              || (inApp(appId) && mine(resource.data)
+                  && request.resource.data.get('createdByUid', null) == resource.data.get('createdByUid', null)
+                  && request.resource.data.get('assignedTo', null) == resource.data.get('assignedTo', null)));
+        allow delete: if isSuper() || isDistOf(appId);
+      }
+
+      // ── Config compartida de la app ──────────────────────────────────────
+      // Mismo mapa que src/data/storeCore.ts (SHARED_WRITERS).
+      match /shared/{docId} {
+        function writerOk() {
+          return staffOrSuper(appId)
+            || (inApp(appId) && docId in ['cofreAperturas', 'notificaciones', 'cumpleNotifs'])
+            || (inApp(appId) && me().role == 'telemarketing_reclutamiento' && docId in ['socios', 'docsSocios'])
+            || (inApp(appId) && me().role == 'telemarketing_cobranza' && docId == 'cobranza');
+        }
+        allow read:  if isSuper() || inApp(appId);
+        allow write: if writerOk() && docId != 'callLog';   // el histórico de llamadas es solo lectura
+      }
+
+      // ── Datos propios de cada persona (su conteo de llamadas) ────────────
+      match /userData/{userId} {
+        allow read:  if staffOrSuper(appId) || (inApp(appId) && userId == uid());
+        allow write: if inApp(appId) && userId == uid();
+      }
+
+      // ── Bitácora (la escribe el servidor) y avance del migrador ─────────
+      match /audit/{logId}   { allow read: if staffOrSuper(appId); allow write: if false; }
+      match /_migration/{v}  { allow read: if isSuper();           allow write: if false; }
+    }
+
+    // ── SISTEMA ANTERIOR: congelado como respaldo ─────────────────────────
+    match /crm_telemarketing/{docId} {
+      allow read:  if isSuper();
+      allow write: if false;
+    }
+  }
+}
