@@ -8382,6 +8382,9 @@ export default function App() {
       // onAuthStateChanged actualiza authUser; después ImpactOS valida si el correo está autorizado.
     } catch(e){
       const c=e?.code||"";
+      // DIAGNÓSTICO (solo modo v2 / proyecto de prueba): muestra el error real de Firebase.
+      // Producción (ACCESS_V2 apagado) sigue con los mensajes amigables de abajo.
+      if(ACCESS_V2){ setLoginError(`${c||"sin código"} — ${e?.message||String(e)}`); return; }
       if(c.includes("popup-closed") || c.includes("cancelled-popup")) setLoginError("Inicio de sesión cancelado.");
       else if(c.includes("popup-blocked")) setLoginError("El navegador bloqueó la ventana de Google. Permite ventanas emergentes e inténtalo otra vez.");
       else setLoginError("No se pudo iniciar sesión con Google. Inténtalo de nuevo.");
