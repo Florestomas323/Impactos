@@ -55,16 +55,50 @@ export const ENGINE_FIELDS = [
 export const docIdFor = (section: Section, legacyId: string) =>
   section === "cobranza" ? `cob_${legacyId}` : String(legacyId);
 
-// Consultas por rol. El telemarketing NUNCA descarga la base completa.
-export type QuerySpec = { collection: "records" | "appts"; where: Array<[string, string, any]>; orderBy?: string };
-export function queryFor(user: { role?: string; uid?: string; appId?: string } | null, col: "records" | "appts" = "records"): QuerySpec | null {
-  if (!user?.role) return null;
+// ── Datos que NO son registros ──────────────────────────────────────────────
+// Claves del estado viejo que pertenecen al sistema de acceso anterior: no se
+// migran ni se sincronizan en el sistema nuevo (users/ e invitations/ las reemplazan).
+export const LEGACY_AUTH_KEYS = ["cuentasCustom", "usuariosCustom", "preguntasSeguridad"];
+// Respaldos completos del estado viejo: pueden pesar más de 1 MB (límite de un
+// documento de Firestore). Quedan en crm_telemarketing, que no se borra nunca.
+export const LOCAL_ONLY_KEYS = ["respaldos"];
+// Claves con tratamiento propio en el store.
+export const RECORD_KEYS = ["agregados", "referidos", "prospectos", "distribucion", "reclutamiento", "appts", "cobranza"];
+
+// ¿Esta clave del estado va a workspaces/{appId}/shared/{clave}?
+export function isSharedKey(k: string): boolean {
+  return !!k && !k.startsWith("_") && !RECORD_KEYS.includes(k) && !LEGACY_AUTH_KEYS.includes(k) && !LOCAL_ONLY_KEYS.includes(k);
+}
+// Cobranza: la config (umbrales, meses, reportes…) va a shared/cobranza;
+// cada cliente de clientesData es un registro (section "cobranza").
+export const COBRANZA_SHARED_DOC = "cobranza";
+// callLog: el histórico viejo queda en shared/callLog (solo lectura); lo nuevo
+// de cada persona va a userData/{uid}.callLog. El store los suma para mostrar.
+export const CALLLOG_KEY = "callLog";
+
+// ── Consultas por rol ───────────────────────────────────────────────────────
+// El telemarketing NUNCA descarga la base completa: una consulta por cada
+// sección que su especialidad trabaja, siempre con assignedTo == su uid.
+// (Así las Rules pueden verificar la consulta completa; ver firestore.rules.)
+export const SECTIONS_FOR_ROLE: Record<string, Section[]> = {
+  telemarketing_ventas: ["agregados", "referidos", "prospectos"],
+  telemarketing_cobranza: ["cobranza", "distribucion"],
+  telemarketing_reclutamiento: ["reclutamiento"],
+};
+export type QuerySpec = { collection: "records" | "appts"; where: Array<[string, string, any]> };
+export function queriesFor(user: { role?: string; uid?: string } | null, col: "records" | "appts" = "records"): QuerySpec[] {
+  if (!user?.role || !user?.uid) return [];
   const r = user.role;
-  if (r === "super_admin" || r === "distribuidor" || r === "supervisor") {
-    return { collection: col, where: [["eliminado", "==", false]], orderBy: "actualizado" };
+  // Staff: toda su app, papelera incluida (la UI la necesita).
+  if (r === "super_admin" || r === "distribuidor" || r === "supervisor") return [{ collection: col, where: [] }];
+  if (col === "appts") {
+    return [
+      { collection: "appts", where: [["assignedTo", "==", user.uid]] },
+      { collection: "appts", where: [["createdByUid", "==", user.uid]] },
+    ];
   }
-  if (r.startsWith("telemarketing_")) {
-    return { collection: col, where: [["assignedTo", "==", user.uid], ["eliminado", "==", false]], orderBy: "actualizado" };
-  }
-  return null;
+  return (SECTIONS_FOR_ROLE[r] || []).map((sec) => ({
+    collection: "records" as const,
+    where: [["assignedTo", "==", user.uid], ["section", "==", sec]] as Array<[string, string, any]>,
+  }));
 }
