@@ -1,0 +1,29 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# PRUEBAS DE FIRESTORE RULES — contra el EMULADOR oficial de Firebase.
+# No usa credenciales, no se conecta a ningún proyecto real, no publica nada.
+# ═══════════════════════════════════════════════════════════════════════════
+name: Firestore Rules — pruebas en emulador
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Herramientas del emulador (no tocan package.json)
+        run: npm install --no-save --no-audit --no-fund firebase-tools@13 @firebase/rules-unit-testing@3 firebase@10
+      - name: Correr pruebas de reglas en el emulador
+        run: npx firebase emulators:exec --only firestore --project impactos-rules-test "node --test tests/rules/"

@@ -1,0 +1,40 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# SIEMBRA DE DATOS SINTÉTICOS — solo en el proyecto de Firebase de PRUEBA.
+# Usa un secret DISTINTO al de producción y el script aborta si detecta
+# el proyecto de producción. Tampoco publica Rules ni índices.
+# ═══════════════════════════════════════════════════════════════════════════
+name: Prueba — sembrar datos sintéticos
+
+on:
+  workflow_dispatch:
+    inputs:
+      super_email:
+        description: "Tu correo de Google (para crear tu Súper Admin de PRUEBA)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install --no-save --no-audit --no-fund firebase-admin esbuild
+      - run: npx esbuild src/services/migration.ts --bundle --platform=node --format=esm --outfile=dist-migration/migration.js
+      - name: Credencial del proyecto de PRUEBA (fuera del repo)
+        env:
+          SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_TEST }}
+        run: |
+          [ -n "$SA_JSON" ] || { echo "Falta el secret FIREBASE_SERVICE_ACCOUNT_TEST."; exit 1; }
+          printf '%s' "$SA_JSON" > "$RUNNER_TEMP/sa.json"; chmod 600 "$RUNNER_TEMP/sa.json"
+      - name: Sembrar
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
+        run: node scripts/seed-test.mjs --super "${{ inputs.super_email }}"
+      - if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"
