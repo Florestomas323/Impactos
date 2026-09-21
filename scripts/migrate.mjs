@@ -59,10 +59,11 @@ async function main() {
   const docs = {};
   snap.forEach((d) => { const p = d.data()?.payload; if (p !== undefined) docs[d.id] = p; });
   log(`Documentos leídos de ${LEGACY_COL}: ${snap.size}`);
-  const estado = joinLegacyDocs(docs);
+  const avisosUnion = [];
+  const estado = joinLegacyDocs(docs, avisosUnion);
 
   // 2) Plan + verificación ANTES de tocar nada
-  const plan = planMigration(estado, APP);
+  const plan = planMigration(estado, APP, new Date(), avisosUnion);
   const reporte = verifyMigration(estado, plan, APP);
   log("\n" + formatReport(reporte) + "\n");
   if (!reporte.ok) { log("Los conteos no cuadran. No se escribe nada. Revisa el reporte."); process.exit(1); }
@@ -123,7 +124,9 @@ async function main() {
 
   // 5) Cuentas actuales → invitaciones (nadie pierde acceso; entran con su Google de siempre)
   let inv = 0;
-  for (const c of estado.cuentasCustom || []) {
+  const cuentas = Array.isArray(estado.cuentasCustom) ? estado.cuentasCustom
+    : (estado.cuentasCustom && typeof estado.cuentasCustom === "object" ? Object.values(estado.cuentasCustom) : []);
+  for (const c of cuentas) {
     const email = String(c?.email || "").trim().toLowerCase();
     if (!email) continue;
     const role = mapLegacyRole(c?.rol, email, SUPER_EMAIL);
