@@ -7,7 +7,7 @@
 // Aquí se LEEN de forma segura (asList) para contar y calcular, pero el valor
 // original viaja al registro nuevo EXACTAMENTE como estaba. Cada forma
 // inesperada queda anotada en los avisos del reporte: nada se oculta.
-import { Section, SECTIONS, SECTION_ASSIGNMENT, MIGRATION_VERSION, LEGACY_SOURCE, docIdFor, RecordDoc } from "../data/schema";
+import { Section, SECTIONS, SECTION_ASSIGNMENT, MIGRATION_VERSION, LEGACY_SOURCE, docIdFor, RecordDoc, isSharedKey, COBRANZA_SHARED_DOC } from "../data/schema";
 import { deriveWorkStatus, asList, asEntries, shapeOf } from "./assignments";
 
 const LIST_SECTIONS: Section[] = ["agregados", "referidos", "prospectos", "distribucion", "reclutamiento"];
@@ -227,21 +227,13 @@ export function planMigration(estado: any, appId: string, now: Date = new Date()
     return false;
   });
 
-  // Config y catálogos compartidos: viajan completos, fuera de los registros.
+  // Todo lo que no es registro va a shared/{clave} con el MISMO nombre que usa
+  // la app (así el store nuevo lo lee sin traducir). Cobranza: su config sin clientesData.
+  const shared: Record<string, any> = {};
+  Object.keys(estado || {}).forEach((k) => { if (isSharedKey(k)) shared[k] = estado[k]; });
   const cobranzaResto: any = { ...(estado?.cobranza && typeof estado.cobranza === "object" ? estado.cobranza : {}) };
   delete cobranzaResto.clientesData;
-  const shared: Record<string, any> = {
-    cobranzaConfig: cobranzaResto,
-    incentivos: estado?.incentivos ?? [],
-    cofre: { config: estado?.cofreConfig ?? {}, aperturas: estado?.cofreAperturas ?? [] },
-    catalogo: estado?.catalogoCustom ?? {},
-    cumpleanos: estado?.cumpleanos ?? [],
-    rutas: estado?.rutas ?? [],
-    controlCierres: estado?.controlCierres ?? [],
-    socios: estado?.socios ?? [],
-    plantillas: { cumpleMsgTpl: estado?.cumpleMsgTpl ?? "" },
-    callLogLegacy: estado?.callLog ?? {},
-  };
+  shared[COBRANZA_SHARED_DOC] = cobranzaResto;
   return { records, appts, shared, warnings, shapeWarnings, sinId };
 }
 

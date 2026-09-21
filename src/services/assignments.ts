@@ -39,7 +39,8 @@ export function shapeOf(value: any): string {
   return typeof value;
 }
 
-const ESTADOS_NO_CONTESTO = ["naranja", "buzon"];
+// Estados reales de ImpactOS: "buzon" = Buzón de voz (no contestó). "naranja" es Pendiente/Seguimiento.
+const ESTADOS_NO_CONTESTO = ["buzon"];
 const ESTADOS_BLOQUEO = ["numero_equivocado"];
 const esContacto = (h: any) => !!h && (h.tipo === "llamada" || h.tipo === "estado" || h.tipo === "cita");
 
