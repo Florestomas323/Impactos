@@ -74,10 +74,15 @@ export function ManualAssignment({ me, getDB, state, members, notify }: { me: an
   const marcados = filtrados.filter((r: any) => sel[r._docId]);
   const yaAsignados = marcados.filter((r: any) => r.assignedTo && r.assignedTo !== destino);
   const todosVisiblesMarcados = visibles.length > 0 && visibles.every((r: any) => sel[r._docId]);
+  const todosMarcados = filtrados.length > 0 && filtrados.every((r: any) => sel[r._docId]);
+  // Cartera actual de cada persona: solo para verla. Nadie tiene tope de registros.
+  const carteraDe = (uid: string) => SECCIONES.reduce((n, sc) => n + registrosDeSeccion(state, sc.id).filter((r: any) => r.assignedTo === uid && !r.eliminado).length, 0);
   const listo = marcados.length > 0 && !!dest;
 
   const toggle = (id: string) => setSel((p) => ({ ...p, [id]: !p[id] }));
   const marcarVisibles = () => setSel((p) => { const n = { ...p }; visibles.forEach((r: any) => { n[r._docId] = !todosVisiblesMarcados; }); return n; });
+  // Marca TODO lo que cumple los filtros, no solo lo que cabe en pantalla.
+  const marcarTodos = () => setSel((p) => { const n = { ...p }; filtrados.forEach((r: any) => { n[r._docId] = !todosMarcados; }); return n; });
 
   const guardar = async () => {
     setBusy(true); setResultado("");
@@ -136,6 +141,7 @@ export function ManualAssignment({ me, getDB, state, members, notify }: { me: an
           <div className="flex items-center gap-3">
             <span className="text-sm text-[#111827]"><b>{marcados.length}</b> marcados de {filtrados.length}</span>
             <button className="text-xs font-bold px-3 py-1.5 rounded-lg border border-[#E2E8F0]" onClick={marcarVisibles}>{todosVisiblesMarcados ? "Quitar selección" : "Marcar los visibles"}</button>
+            {filtrados.length > visibles.length && <button className="text-xs font-bold px-3 py-1.5 rounded-lg border border-[#E2E8F0]" onClick={marcarTodos}>{todosMarcados ? "Quitar todos" : `Marcar los ${filtrados.length}`}</button>}
             {marcados.length > 0 && <button className="text-xs font-bold text-[#667085]" onClick={() => setSel({})}>Limpiar</button>}
           </div>
         </div>
@@ -170,7 +176,7 @@ export function ManualAssignment({ me, getDB, state, members, notify }: { me: an
         <div className="text-[11px] font-bold uppercase tracking-wider text-[#667085]">4 · ¿Para quién?</div>
         <select className={inpLight} value={destino} onChange={(e) => setDestino(e.target.value)}>
           <option value="">Elige a la persona…</option>
-          {receptores.map((m) => <option key={m.uid} value={m.uid}>{m.nombre}</option>)}
+          {receptores.map((m) => <option key={m.uid} value={m.uid}>{m.nombre} — ya tiene {carteraDe(m.uid)}</option>)}
         </select>
         {!receptores.length && <div className="text-xs text-amber-700 font-bold">Nadie en esta app tiene un rol que trabaje {seccionLabel}.</div>}
         <div className="flex items-center justify-between gap-3 flex-wrap pt-1">
@@ -183,7 +189,7 @@ export function ManualAssignment({ me, getDB, state, members, notify }: { me: an
       {confirmar && dest && (
         <Modal title="Confirmar asignación manual" onClose={() => !busy && setConfirmar(false)}>
           <div className="text-base font-bold text-[#111827] mb-2">{marcados.length} registros seleccionados de {seccionLabel} → {dest.nombre}.</div>
-          <div className="text-sm text-[#667085] mb-3">Solo cambia el responsable. Notas, mensajes, historial de llamadas, citas y seguimientos se conservan tal cual, y el cambio queda en el historial de asignaciones.</div>
+          <div className="text-sm text-[#667085] mb-3">Se suman a los {carteraDe(dest.uid)} que {dest.nombre} ya tiene: no se le retira nada. Solo cambia el responsable de los marcados. Notas, mensajes, historial de llamadas, citas y seguimientos se conservan tal cual, y el cambio queda en el historial de asignaciones.</div>
           {yaAsignados.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 mb-3">
               <div className="text-sm font-bold text-amber-800 mb-1">{yaAsignados.length} ya tienen responsable</div>

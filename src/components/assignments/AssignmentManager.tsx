@@ -54,6 +54,8 @@ export function AssignmentManager({ me, getDB, state, notify }: { me: any; getDB
   const disponibles = useMemo(() => selectForAssignment(registros, filtros, 0), [registros, JSON.stringify(filtros)]);
   const seleccion = disponibles.slice(0, Math.max(0, cantidad));
   const dest = members.find((m) => m.uid === destino);
+  // Cuántos registros tiene hoy cada persona. Informativo: no limita nada.
+  const carteraDe = (uid: string) => todos.filter((r: any) => r && r.assignedTo === uid && !r.eliminado).length;
   const orig = members.find((m) => m.uid === origen);
   const listo = seleccion.length > 0 && (mode === "unassign" ? !!orig : !!dest) && (mode !== "reassign" || (!!orig && origen !== destino));
 
@@ -115,14 +117,15 @@ export function AssignmentManager({ me, getDB, state, notify }: { me: any; getDB
             <option value="assign">Asignar datos</option><option value="reassign">Reasignar de una persona a otra</option><option value="unassign">Retirar datos</option>
           </select></Field>
           <Field label="Base"><select className={inpLight} value={base} onChange={(e) => setBase(e.target.value)}>{cfg.bases.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}</select></Field>
-          <Field label="Cantidad"><input className={inpLight} type="number" min={1} max={5000} value={cantidad} onChange={(e) => setCantidad(Math.max(1, Math.min(5000, Number(e.target.value) || 1)))} /></Field>
+          <Field label="Cantidad"><input className={inpLight} type="number" min={1} value={cantidad} onChange={(e) => setCantidad(Math.max(1, Number(e.target.value) || 1))} /></Field>
         </div>
         <div className="grid sm:grid-cols-2 gap-3">
           {mode !== "assign" && <Field label="De"><select className={inpLight} value={origen} onChange={(e) => setOrigen(e.target.value)}>
             <option value="">Elige…</option>{todosTm.map((m) => <option key={m.uid} value={m.uid}>{m.nombre}{m.status !== "active" ? ` (${m.status})` : ""}</option>)}
           </select></Field>}
           {mode !== "unassign" && <Field label="Para"><select className={inpLight} value={destino} onChange={(e) => setDestino(e.target.value)}>
-            <option value="">Elige…</option>{tms.map((m) => <option key={m.uid} value={m.uid}>{m.nombre}</option>)}
+            {/* La cartera de cada quien se muestra solo como dato: nunca impide asignarle más. */}
+            <option value="">Elige…</option>{tms.map((m) => <option key={m.uid} value={m.uid}>{m.nombre} — ya tiene {carteraDe(m.uid)}</option>)}
           </select></Field>}
         </div>
         {mode !== "unassign" && !tms.length && <div className="text-xs text-amber-700 font-bold">No hay telemarketing de {cfg.label} activo en esta app.</div>}
@@ -147,7 +150,10 @@ export function AssignmentManager({ me, getDB, state, notify }: { me: any; getDB
         </div>
 
         <div className="flex items-center justify-between gap-3 flex-wrap border-t border-[#EEF1F5] pt-3">
-          <div className="text-sm text-[#111827]"><b>{disponibles.length}</b> registros cumplen · se tomarán <b>{seleccion.length}</b> (los que llevan más tiempo sin contacto primero)</div>
+          <div className="text-sm text-[#111827] flex items-center gap-2 flex-wrap">
+            <span><b>{disponibles.length}</b> registros cumplen · se tomarán <b>{seleccion.length}</b> (los que llevan más tiempo sin contacto primero)</span>
+            {disponibles.length > cantidad && <button className="text-xs font-bold px-2 py-1 rounded-lg border border-[#E2E8F0]" onClick={() => setCantidad(disponibles.length)}>Tomar los {disponibles.length}</button>}
+          </div>
           <PrimaryBtn disabled={!listo || busy} onClick={() => setConfirmar(true)}>Revisar y confirmar</PrimaryBtn>
         </div>
         {resultado && <div className="text-sm font-bold rounded-xl px-3 py-2 text-emerald-700 bg-emerald-50 border border-emerald-200">{resultado}</div>}
@@ -162,7 +168,7 @@ export function AssignmentManager({ me, getDB, state, notify }: { me: any; getDB
 
       {confirmar && <Modal title="Confirmar" onClose={() => !busy && setConfirmar(false)}>
         <div className="text-base font-bold text-[#111827] mb-2">{frase}</div>
-        <div className="text-sm text-[#667085] mb-4">Solo cambia el responsable. Notas, mensajes, historial, llamadas, citas y seguimientos se conservan tal cual. Queda registrado en el historial de asignaciones.{base === "cobranza" ? " En Cobranza, el cliente de Distribución enlazado va con su cuenta." : ""}</div>
+        <div className="text-sm text-[#667085] mb-4">{mode === "assign" && dest ? `Se suman a los ${carteraDe(dest.uid)} que ${dest.nombre} ya tiene: no se le quita nada. ` : ""}Solo cambia el responsable. Notas, mensajes, historial, llamadas, citas y seguimientos se conservan tal cual. Queda registrado en el historial de asignaciones.{base === "cobranza" ? " En Cobranza, el cliente de Distribución enlazado va con su cuenta." : ""}</div>
         <PrimaryBtn full disabled={busy} onClick={ejecutar}>{busy ? "Aplicando…" : "Confirmar"}</PrimaryBtn>
       </Modal>}
     </div>
