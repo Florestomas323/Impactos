@@ -10,6 +10,7 @@ import { roleForAssignmentType, AssignmentType } from "../../auth/roles";
 import { docIdFor } from "../../data/schema";
 import { useTeam } from "../../services/members";
 import { WorkloadTable } from "./WorkloadTable";
+import { ManualAssignment } from "./ManualAssignment";
 
 const TABS: Array<{ id: AssignmentType; label: string; bases: Array<{ id: string; label: string }> }> = [
   { id: "ventas", label: "Ventas", bases: [{ id: "agregados", label: "Agregados" }, { id: "prospectos", label: "Prospección" }, { id: "referidos", label: "Referidos" }] },
@@ -23,6 +24,7 @@ type Mode = "assign" | "unassign" | "reassign";
 
 export function AssignmentManager({ me, getDB, state, notify }: { me: any; getDB: () => Promise<any>; state: any; notify?: (m: string) => void }) {
   const { members } = useTeam(getDB, me, me.appId);
+  const [modo, setModo] = useState<"automatica" | "manual">("automatica");
   const [tab, setTab] = useState<AssignmentType>("ventas");
   const [base, setBase] = useState("agregados");
   const [mode, setMode] = useState<Mode>("assign");
@@ -88,9 +90,20 @@ export function AssignmentManager({ me, getDB, state, notify }: { me: any; getDB
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-extrabold tracking-tight text-[#111827]">Distribución de datos</h1>
-        <div className="text-sm text-[#667085]">Cada registro tiene como máximo un telemarketing a la vez. Reasignar nunca borra notas ni historial.</div>
+        <div className="text-sm text-[#667085]">Automática: reparte por filtros. Manual: eliges tú cada registro. Un registro tiene como máximo un responsable, y reasignar nunca borra notas ni historial.</div>
       </div>
 
+      {/* Dos formas de repartir: por filtros (automática) o marcando registros (manual). */}
+      <div className="inline-flex rounded-xl border border-[#E2E8F0] bg-white p-1">
+        {([["automatica", "Automática"], ["manual", "Manual"]] as const).map(([id, label]) => (
+          <button key={id} onClick={() => setModo(id)}
+            className={`px-4 py-1.5 rounded-lg text-sm font-bold ${modo === id ? "bg-[#2563EB] text-white" : "text-[#667085]"}`}>{label}</button>
+        ))}
+      </div>
+
+      {modo === "manual" && <ManualAssignment me={me} getDB={getDB} state={state} members={members as any} notify={notify} />}
+
+      {modo === "automatica" && (<>
       <div className="flex gap-2">
         {TABS.map((t) => <button key={t.id} onClick={() => { setTab(t.id); setBase(t.bases[0].id); setDestino(""); setOrigen(""); }}
           className={`px-4 py-2 rounded-xl text-sm font-bold border ${tab === t.id ? "bg-[#2563EB] text-white border-[#2563EB]" : "bg-white border-[#E2E8F0] text-[#111827]"}`}>{t.label}</button>)}
@@ -139,6 +152,8 @@ export function AssignmentManager({ me, getDB, state, notify }: { me: any; getDB
         </div>
         {resultado && <div className="text-sm font-bold rounded-xl px-3 py-2 text-emerald-700 bg-emerald-50 border border-emerald-200">{resultado}</div>}
       </div>
+
+      </>)}
 
       <div>
         <div className="text-base font-bold text-[#111827] mb-2">Carga de trabajo</div>
