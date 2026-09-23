@@ -9,7 +9,7 @@ const WRITE_FIELDS = [...ASSIGNMENT_FIELDS, "lastAssignedAt", "asignado_a", "act
 const LOTE = 200;
 
 export type Action =
-  | { kind: "assign"; toUid: string; toName: string; type: AssignmentType; reason?: string; allowReassign?: boolean }
+  | { kind: "assign"; toUid: string; toName: string; type: AssignmentType; reason?: string; allowReassign?: boolean; via?: "manual" | "automatica" }
   | { kind: "unassign"; reason?: string };
 export type WriteSummary = { ok: number; skipped: Array<{ id: string; error: string }>; failedBatches: number };
 
@@ -30,7 +30,7 @@ export function planOne(current: any, action: Action, byUid: string, now: Date, 
     }
     return unassignRecord(current, { byUid, reason: action.reason, now });
   }
-  const o: AssignOpts = { toUid: action.toUid, toName: action.toName, byUid, type: action.type, reason: action.reason, now, allowReassign: action.allowReassign, expectedAssignedTo };
+  const o: AssignOpts = { toUid: action.toUid, toName: action.toName, byUid, type: action.type, reason: action.reason, now, allowReassign: action.allowReassign, expectedAssignedTo, via: action.via };
   return assignRecord(current, o);
 }
 

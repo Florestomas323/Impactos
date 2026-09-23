@@ -15,6 +15,9 @@ export type AssignmentEntry = {
   userId: string; userName: string; type: AssignmentType;
   assignedBy: string; assignedAt: string;
   unassignedAt: string | null; unassignedBy: string | null; reason: string;
+  // De dónde salió el cambio y a quién se le quitó (queda en el historial).
+  via?: "manual" | "automatica";
+  previousUserId?: string | null; previousUserName?: string;
 };
 
 // ── Lectura segura de listas históricas ─────────────────────────────────────
@@ -131,6 +134,7 @@ export type AssignOpts = {
   reason?: string; now?: Date;
   allowReassign?: boolean;              // reasignación EXPLÍCITA
   expectedAssignedTo?: string | null;   // candado contra choques entre dos supervisores
+  via?: "manual" | "automatica";        // cómo se repartió: a mano o por filtros
 };
 export type AssignResult = { record: any; changed: boolean; error: string };
 
@@ -153,6 +157,9 @@ export function assignRecord(rec: any, o: AssignOpts): AssignResult {
   const entry: AssignmentEntry = {
     userId: o.toUid, userName: o.toName, type: o.type, assignedBy: o.byUid,
     assignedAt: iso, unassignedAt: null, unassignedBy: null, reason,
+    via: o.via || "automatica",
+    previousUserId: rec.assignedTo || null,
+    previousUserName: rec.assignedToName || "",
   };
   const next = {
     ...rec,
