@@ -21,3 +21,12 @@ export const RP = {
 };
 export const SERIF = "'Archivo','Inter',system-ui,sans-serif";
 export const SANS  = "'Inter',system-ui,sans-serif";
+
+// ─── MARCA ──────────────────────────────────────────────────────
+// Violeta tomado del propio ícono de ImpactOS (tono 262°, #6410F8).
+// purple: sobre fondos claros · purpleOnDark: mismo tono, más luminoso
+// para que se lea bien sobre el menú oscuro.
+export const BRAND = {
+  purple: "#6410F8",
+  purpleOnDark: "#A07CFF",
+};

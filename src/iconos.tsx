@@ -26,6 +26,7 @@ import {
   ShowerHead, Siren, Smartphone, Sparkles, Sprout, Square, Star, Tag, Target,
   ThumbsUp, TrendingUp, Trash2, Trophy, Truck, Tv, Unlock, Upload, User, Users,
   Wind, Wrench, X, XCircle, Zap, Circle,
+  Shuffle,
 } from "lucide-react";
 
 // Mapa emoji → icono. La clave es el emoji que ya existía en el código,
@@ -35,7 +36,7 @@ export const ICONOS = {
   "🏠": Home, "📞": Phone, "📅": Calendar, "🔧": Wrench, "📂": FolderOpen,
   "🎁": Gift, "🔍": Search, "🧲": Magnet, "💵": Banknote, "🔎": ScanSearch,
   "🧮": Calculator, "🗺": Map, "🎂": Cake, "🏆": Trophy, "📈": TrendingUp,
-  "📊": BarChart3, "⚙": Settings, "🗄": Database, "🗂": Folders, "📇": Contact,
+  "📊": BarChart3, "🔀": Shuffle, "⚙": Settings, "🗄": Database, "🗂": Folders, "📇": Contact,
 
   // ── Relojes y espera ────────────────────────────────────────
   "⏰": AlarmClock, "⏳": Hourglass, "⏱": Timer, "🕐": Clock,

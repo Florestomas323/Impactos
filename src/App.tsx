@@ -14,6 +14,8 @@ import { UserManagement } from "./components/users/UserManagement";
 import { AccessScreen } from "./components/users/AccessScreen";
 import { AssignmentManager } from "./components/assignments/AssignmentManager";
 import { V2ErrorBoundary } from "./components/V2ErrorBoundary";
+import { NavV2 } from "./components/NavV2";
+import { BRAND } from "./theme";
 import { asList } from "./services/assignments";
 
 import { CUENTA_ROOT, CUENTA_ROOT_DATOS, SEMILLA_CUENTAS, CUENTAS_DINAMICAS, setCuentasDinamicas, todasLasCuentas, cuentaAutorizada, cuentaDeEmail } from "./auth/accounts";
@@ -913,7 +915,7 @@ function Brand({ small, onLight }) {
         style={{width:small?"36px":"46px",height:small?"36px":"46px"}} />
       <div className="leading-tight min-w-0">
         <div className={onLight?"text-[#111827] truncate":"text-[#F4F6F8] truncate"} style={{fontFamily:SANS,fontSize:small?"15px":"19px",fontWeight:800,letterSpacing:"-0.025em"}}>
-          Impact<span style={{color:onLight?"#2563EB":"#60A5FA"}}>OS</span>
+          Impact<span style={{color: ACCESS_V2 ? (onLight?BRAND.purple:BRAND.purpleOnDark) : (onLight?"#2563EB":"#60A5FA")}}>OS</span>
         </div>
         <div className="text-[10px] mt-0.5 text-[#94A3B8] font-medium truncate">Business Operating System</div>
       </div>
@@ -6285,7 +6287,7 @@ const NAV=[{id:"inicio",icon:"▦",label:"Centro de mando"},{id:"llamadas",icon:
 
 // Pestañas del sistema nuevo (solo con VITE_ACCESS_V2=1).
 const NAV_ALL = ACCESS_V2
-  ? [...NAV.filter(n=>n.id!=="config"), {id:"asignaciones",icon:"🧩",label:"Distribución de datos"}, {id:"usuarios",icon:"👥",label:"Usuarios y permisos"}, ...NAV.filter(n=>n.id==="config")]
+  ? [...NAV.filter(n=>n.id!=="config"), {id:"asignaciones",icon:"🔀",label:"Distribución de datos"}, {id:"usuarios",icon:"👥",label:"Usuarios y permisos"}, ...NAV.filter(n=>n.id==="config")]
   : NAV;
 
 // Las 4 secciones que se agrupan bajo la pestaña desplegable "Base de datos"
@@ -8791,7 +8793,11 @@ function AppRoot() {
       <aside className={`fixed top-0 left-0 h-full w-[86vw] max-w-[300px] lg:w-[252px] lg:max-w-none z-50 flex flex-col transition-transform duration-300 ${sideOpen?"translate-x-0":"-translate-x-full"} lg:translate-x-0 bg-[#080D16] border-r border-[#182231] shadow-2xl lg:shadow-none`}>
         <div className="px-4 py-4 border-b border-white/[0.07]"><Brand small /></div>
         <div className="flex-1 overflow-y-auto py-4 px-3">
-          {NAV_ALL.filter(n=>canTab(n.id) && (n.id!=="incentivo"||puedeGestionarIncentivos)).map(n=>{
+          {ACCESS_V2 ? (
+            <NavV2 nav={NAV_ALL} dbTabs={DB_TABS} tab={tab} total={total} pendientes={pendientes} citas={citas}
+              canSee={(id)=>canTab(id) && (id!=="incentivo"||puedeGestionarIncentivos)}
+              go={(id)=>{setTab(id);setSideOpen(false);}} />
+          ) : NAV_ALL.filter(n=>canTab(n.id) && (n.id!=="incentivo"||puedeGestionarIncentivos)).map(n=>{
             const sectionLabel =
               n.id==="inicio" ? "Resumen" :
               n.id==="llamadas" ? "Operación" :
