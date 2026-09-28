@@ -77,6 +77,30 @@ export function buildState(d: Docs, base: Record<string, any> = {}): Record<stri
   return st;
 }
 
+// ── Cita → documento a guardar ──────────────────────────────────────────────
+// NUEVA (no existe en Firestore): la firma quien la crea (createdByUid/Name =
+//   usuario v2) y conserva el assignedTo que traiga (p. ej. el distribuidor que
+//   hará la visita); si no trae, null. Nunca se asigna sola al telemarketing.
+// EXISTENTE: autoría y responsable salen del documento guardado. Si una cita
+//   legacy no tenía createdByUid/createdByName, editarla NO se los inventa.
+//   (Cambiar el responsable de una cita existente queda para una función
+//   autorizada futura; hoy nadie lo cambia desde aquí.)
+export function apptDoc(a: any, cur: any, ctx: Ctx): any {
+  const out: any = { ...clean(a), id: String(a.id), appId: ctx.appId };
+  if (!cur) {
+    out.createdByUid = ctx.uid;
+    out.createdByName = ctx.nombre;
+    out.assignedTo = a.assignedTo ?? null;
+  } else {
+    delete out.createdByUid; delete out.createdByName;
+    if (cur.createdByUid !== undefined) out.createdByUid = cur.createdByUid;
+    if (cur.createdByName !== undefined) out.createdByName = cur.createdByName;
+    out.assignedTo = cur.assignedTo ?? null;
+  }
+  out.eliminado = a.eliminado === true;
+  return out;
+}
+
 // ── Estado → operaciones de escritura ───────────────────────────────────────
 export type Op =
   | { kind: "set"; col: "records" | "appts"; id: string; data: any }
@@ -170,12 +194,7 @@ export function diffState(prev: any, next: any, d: Docs, ctx: Ctx): DiffResult {
       if (!a || a.id == null) return;
       const id = String(a.id), old = P.get(id);
       if (old === a || (old && same(old, a))) return;
-      const cur = d.appts[id];
-      ops.push({ kind: "set", col: "appts", id, data: {
-        ...clean(a), id, appId: ctx.appId,
-        createdByUid: cur?.createdByUid ?? ctx.uid, assignedTo: cur?.assignedTo ?? null,
-        eliminado: a.eliminado === true,
-      } });
+      ops.push({ kind: "set", col: "appts", id, data: apptDoc(a, d.appts[id], ctx) });
     });
     P.forEach((_, id) => {
       if (asList(next?.appts).some((a) => a && String(a.id) === id)) return;
