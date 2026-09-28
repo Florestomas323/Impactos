@@ -15,6 +15,9 @@ import { AccessScreen } from "./components/users/AccessScreen";
 import { AssignmentManager } from "./components/assignments/AssignmentManager";
 import { V2ErrorBoundary } from "./components/V2ErrorBoundary";
 import { NavV2 } from "./components/NavV2";
+import { CommandCenterV2 } from "./components/dashboard/CommandCenterV2";
+import { TIPOS_AGENDA_POR_ROL, PERIODO_LABEL, periodoSoportado } from "./services/commandCenter";
+import { enrichNewAppts } from "./services/apptTrace";
 import { BRAND } from "./theme";
 import { asList } from "./services/assignments";
 
@@ -4380,7 +4383,7 @@ function Dashboard({ allData, appts, setAppts, callLog, agente, goTo, incentivos
   );
 }
 
-function Stats({ data, callLog, appts }) {
+function Stats({ data, callLog, appts, init=null }) {
   const [vista,setVista]=useState("mes");  // "mes" | "historico"
   const flat=[...data.agregados,...data.prospectos,...data.distribucion,...data.referidos];
 
@@ -4445,6 +4448,7 @@ function Stats({ data, callLog, appts }) {
 
   return (
     <div className="space-y-5">
+      <AvisoPeriodo init={init} tab="stats" queMuestra="aquí se ve el mes elegido (por defecto, el actual)" />
       {/* Pestañas Mes / Histórico */}
       <div className="flex gap-1.5">
         <button onClick={()=>setVista("mes")}
@@ -4787,9 +4791,11 @@ function CalendarioAgenda({ appts, onUpdate, onDelete }) {
   );
 }
 
-function Agenda({ appts, setAppts, agente, onVentaSync }) {
-  const [showForm,setShowForm]=useState(false);const [menuOpen,setMenuOpen]=useState(false);
-  const [preType,setPreType]=useState(null);const [calLoading,setCalLoading]=useState(false);const [calMsg,setCalMsg]=useState("");
+// init (solo v2): {filtro, filtroTipo, filtroResultado, abrirTipo, abrirMenu} — llega desde el Centro de mando.
+// tiposPermitidos (solo v2): tipos de agenda que el rol puede crear. Sin estas props: igual que siempre.
+function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitidos=null }) {
+  const [showForm,setShowForm]=useState(!!init?.abrirTipo);const [menuOpen,setMenuOpen]=useState(!!init?.abrirMenu);
+  const [preType,setPreType]=useState(init?.abrirTipo||null);const [calLoading,setCalLoading]=useState(false);const [calMsg,setCalMsg]=useState("");
   const handleSchedule=appt=>{
     setCalMsg("");
     window.open(gcalLink(appt),"_blank");
@@ -4800,9 +4806,9 @@ function Agenda({ appts, setAppts, agente, onVentaSync }) {
   };
   const openWith=(tipo)=>{setPreType(tipo);setMenuOpen(false);setShowForm(true);};
   const [vista,setVista]=useState("lista"); // lista | calendario
-  const [filtro,setFiltro]=useState("hoy");   // hoy | proximas | todas
-  const [filtroTipo,setFiltroTipo]=useState("todos");
-  const [filtroResultado,setFiltroResultado]=useState("todos");
+  const [filtro,setFiltro]=useState(init?.filtro||"hoy");   // hoy | proximas | todas
+  const [filtroTipo,setFiltroTipo]=useState(init?.filtroTipo||"todos");
+  const [filtroResultado,setFiltroResultado]=useState(init?.filtroResultado||"todos");
   const [mostrarFiltros,setMostrarFiltros]=useState(false);
   const [busca,setBusca]=useState("");
   const todayStr=hoyLocal();
@@ -4883,6 +4889,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync }) {
 
   return (
     <div>
+      <AvisoPeriodo init={init} tab="agenda" queMuestra="se listan todas las citas de ese tipo, sin límite de fechas" />
       {calMsg && <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-700 font-bold flex items-center justify-between"><Msg>{calMsg}</Msg><button onClick={()=>setCalMsg("")} className="ml-2"><Ico e="✕" /></button></div>}
 
       {/* ── DROPDOWN TRIGGER ── */}
@@ -4895,7 +4902,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync }) {
         </button>
         {menuOpen && (
           <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-xl shadow-2xl border border-[#e8edf3] overflow-hidden z-40">
-            {TYPE_OPTIONS.map(o=>(
+            {TYPE_OPTIONS.filter(o=>!tiposPermitidos || tiposPermitidos.includes(o.v)).map(o=>(
               <button key={o.v} type="button" onClick={()=>openWith(o.v)}
                 className="w-full flex items-center gap-3 px-5 py-3.5 text-sm font-bold transition border-b border-[#f4f6f9] last:border-0 hover:brightness-95"
                 style={{background:o.color+"12"}}>
@@ -5036,9 +5043,9 @@ function flattenReferidos(referidosArr) {
   return out;
 }
 
-function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts }) {
+function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts, init=null }) {
   const [scheduleClient,setScheduleClient]=useState(null);const [forceTipo,setForceTipo]=useState(null);const [calLoading,setCalLoading]=useState(false);const [calMsg,setCalMsg]=useState("");
-  const [filterCity,setFilterCity]=useState("");const [filterCP,setFilterCP]=useState("");const [search,setSearch]=useState("");const [filterBase,setFilterBase]=useState("todas");
+  const [filterCity,setFilterCity]=useState("");const [filterCP,setFilterCP]=useState("");const [search,setSearch]=useState("");const [filterBase,setFilterBase]=useState(init?.filterBase||"todas");
 
   const referidosLlamables = flattenReferidos(data.referidos)
     .filter(c=>(c.nombre&&c.nombre!=="(Referido sin nombre)")||c.telefono)  // solo referidos con datos reales
@@ -5934,10 +5941,12 @@ function SociosPanel({ socios, setSocios, docsSocios, setDocsSocios, agente }){
   );
 }
 
-function RecruitmentSection({ reclutamiento, setReclutamiento, agente, notify, rolActivo, setAppts, socios, setSocios, docsSocios, setDocsSocios }) {
+// init (solo v2): {tab:"entrevistas", soloHoy:true} — llega desde el Centro de mando. Sin init: igual que siempre.
+function RecruitmentSection({ reclutamiento, setReclutamiento, agente, notify, rolActivo, setAppts, socios, setSocios, docsSocios, setDocsSocios, init=null }) {
   const [showForm,setShowForm]=useState(false);
   const [editId,setEditId]=useState(null);
-  const [tab,setTab]=useState("todos"); // todos | entrevistas
+  const [tab,setTab]=useState(init?.tab||"todos"); // todos | entrevistas
+  const [soloHoy,setSoloHoy]=useState(!!init?.soloHoy); // v2: entrevistas agendadas para hoy
   const [form,setForm]=useState({nombre:"",telefono:"",fuente:"",entrevistado:false,resultado:"Pendiente"});
   const [busca,setBusca]=useState("");
 
@@ -6051,9 +6060,17 @@ function RecruitmentSection({ reclutamiento, setReclutamiento, agente, notify, r
         </div>
       )}
 
+      {ACCESS_V2 && tab==="entrevistas" && (
+        <div className="flex gap-1.5">
+          {[[true,"Hoy"],[false,"Todas"]].map(([v,l])=>(
+            <button key={l} onClick={()=>setSoloHoy(v)} className={`px-3 py-1.5 rounded-lg text-xs font-bold ${soloHoy===v?"text-white":"text-slate-600 bg-[#f4f6f9]"}`} style={soloHoy===v?{background:RP.navy}:{}}>{l}</button>
+          ))}
+        </div>
+      )}
       {(() => {
         if(tab==="socios") return <SociosPanel socios={socios} setSocios={setSocios} docsSocios={docsSocios} setDocsSocios={setDocsSocios} agente={agente} />;
-        const listaMostrar = tab==="entrevistas" ? lista.filter(r=>r.entrevista_agendada) : lista;
+        let listaMostrar = tab==="entrevistas" ? lista.filter(r=>r.entrevista_agendada) : lista;
+        if(ACCESS_V2 && tab==="entrevistas" && soloHoy) listaMostrar = listaMostrar.filter(r=>String(r.entrevista_agendada||"").startsWith(hoyLocal()));
         if(listaMostrar.length===0) return (
           <div className="text-center py-12 text-slate-400"><div className="mb-3 flex justify-center"><Ico e={tab==="entrevistas"?"🤝":"🧲"} size={36} strokeWidth={1.25} className="opacity-40" /></div><div className="text-sm font-bold">{tab==="entrevistas"?"Sin entrevistas agendadas.":"Sin prospectos de reclutamiento."}</div><div className="text-xs mt-1">{tab==="entrevistas"?"Agenda una entrevista desde un prospecto en \"Todos\".":"Toca \"+ Nuevo\" para agregar el primero."}</div></div>
         );
@@ -6292,6 +6309,20 @@ const NAV_ALL = ACCESS_V2
 
 // Las 4 secciones que se agrupan bajo la pestaña desplegable "Base de datos"
 const DB_TABS=["agregados","referidos","prospectos","distribucion"];
+
+// v2: cuando el Centro de mando abre una pantalla que no filtra el periodo medido,
+// se muestra cuál era para que la cifra y la lista no parezcan contradecirse.
+function AvisoPeriodo({ init, tab, queMuestra }) {
+  if(!ACCESS_V2 || !init?.periodo || periodoSoportado(tab, init.periodo)) return null;
+  const f=(d)=>{ const [y,m,dd]=String(d||"").split("-"); return dd&&m ? `${Number(dd)}/${Number(m)}` : ""; };
+  const r=init.rango||{};
+  return (
+    <div className="mb-3 p-3 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] text-[13px] text-[#4C1D95]">
+      <b>Desde el Centro de mando · {PERIODO_LABEL[init.periodo]}</b>{r.desde?` (${f(r.desde)}${r.hasta&&r.hasta!==r.desde?` – ${f(r.hasta)}`:""})`:""}{init.metrica?` · ${init.metrica}`:""}.
+      <span className="text-[#6D28D9]"> Esta pantalla aún no filtra por ese periodo: {queMuestra}.</span>
+    </div>
+  );
+}
 
 // ─── MODAL DE REVISIÓN EDITABLE DE REFERIDOS ──────────────────
 function RefReviewModal({ records, onSave, onClose }) {
@@ -7847,9 +7878,9 @@ function CartuchosServicioPanel({ allData, appts, setAppts, agente, notify }){
   );
 }
 
-function ServicioSection({ appts, setAppts, agente, notify, allData }) {
+function ServicioSection({ appts, setAppts, agente, notify, allData, init=null }) {
   const [vista,setVista]=useState("servicios"); // servicios | cartuchos
-  const [filtro,setFiltro]=useState("todos"); // todos | pendiente | realizado | no_realizado
+  const [filtro,setFiltro]=useState(init?.filtro||"todos"); // todos | pendiente | realizado | no_realizado | hoy (v2)
   const [expandido,setExpandido]=useState(null);
   const [notaEdit,setNotaEdit]=useState({});const [ventaForm,setVentaForm]=useState(null); // {servId, monto, prod}
 
@@ -7862,6 +7893,7 @@ function ServicioSection({ appts, setAppts, agente, notify, allData }) {
 
   const filtrados=servicios.filter(s=>{
     if(filtro==="todos") return true;
+    if(filtro==="hoy") return String(s.fecha||"").startsWith(hoyISO);
     return estadoDe(s)===filtro;
   }).sort((a,b)=>new Date(b.fecha||0)-new Date(a.fecha||0));
 
@@ -7950,8 +7982,9 @@ function ServicioSection({ appts, setAppts, agente, notify, allData }) {
       ) : (<>
 
       {/* Filtros por estado */}
-      <div className="grid grid-cols-4 gap-2">
+      <div className={`grid ${ACCESS_V2?"grid-cols-5":"grid-cols-4"} gap-2`}>
         {[
+          ...(ACCESS_V2?[{id:"hoy",label:"Hoy",n:servicios.filter(s=>String(s.fecha||"").startsWith(hoyISO)).length}]:[]),
           {id:"todos",label:"Todos",n:conteos.todos},
           {id:"pendiente",ico:"⏳", label:"Pend.",n:conteos.pendiente},
           {id:"realizado",ico:"✅", label:"Hechos",n:conteos.realizado},
@@ -8322,7 +8355,11 @@ export default function App() {
 }
 function AppRoot() {
   const [tab,setTab]=useState("inicio");const [sideOpen,setSideOpen]=useState(false);const [showAI,setShowAI]=useState(false);const [showCSV,setShowCSV]=useState(false);
-  const [dbOpen,setDbOpen]=useState(false); // grupo desplegable "Base de datos" en el menú lateral
+  const [dbOpen,setDbOpen]=useState(false);
+  // v2: el Centro de mando navega con una "intención" (filtro o formulario a abrir).
+  // Se consume al entrar a esa pestaña y se descarta al ir a cualquier otra.
+  const [navIntent,setNavIntent]=useState(null);
+  useEffect(()=>{ if(navIntent && navIntent.tab!==tab) setNavIntent(null); },[tab]); // grupo desplegable "Base de datos" en el menú lateral
   const role="admin"; // todos tienen acceso completo
   // ── Firebase Auth: estado de sesión ──
   const [authUser,setAuthUser]=useState(null);     // usuario de Firebase, o null
@@ -8497,7 +8534,12 @@ function AppRoot() {
   },[synced,state.cumpleanos,state.distribucion]);
 
   const setSection=(section,fn)=>setState(s=>({...s,[section]: typeof fn==="function"?fn(s[section]):fn}));
-  const setAppts=fn=>setState(s=>({...s,appts: typeof fn==="function"?fn(s.appts||[]):fn}));
+  // Todas las citas de la app pasan por aquí. En v2 las nuevas quedan firmadas con
+  // createdByUid/createdByName (src/services/apptTrace.ts). Producción: igual que siempre.
+  const setAppts=fn=>setState(s=>{
+    const next=typeof fn==="function"?fn(s.appts||[]):fn;
+    return {...s,appts: ACCESS_V2 && v2User ? enrichNewAppts(s.appts||[], next, {uid:v2User.uid, nombre:v2User.nombre}) : next};
+  });
   // ── SINCRONIZACIÓN Agenda → bases de datos ──
   // Cuando una cita de la Agenda se marca como VENTA, la atribuimos a una base:
   // si el teléfono coincide con un cliente existente, le sumamos la venta a su
@@ -8894,21 +8936,27 @@ function AppRoot() {
               <span className="flex-1">{sinEmoji(fbError)}</span>
               <button onClick={reintentarFb} className="shrink-0 text-xs px-2 py-1 rounded-lg bg-red-600 text-white">Reintentar ahora</button>
             </div>}
-            {tab==="inicio" && <Dashboard allData={allData} appts={state.appts||[]} setAppts={setAppts} callLog={state.callLog} agente={agenteActivo} goTo={goTo} incentivos={state.incentivos||[]} cofreConfig={state.cofreConfig} cofreAperturas={state.cofreAperturas||[]} abrirCofre={abrirCofre} rolActivo={rolUsuario} respaldos={state.respaldos||[]} registrarRespaldo={registrarRespaldo} cumpleanos={state.cumpleanos||[]} />}
-            {tab==="agenda" && <Agenda appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} onVentaSync={sincronizarVentaAgenda} />}
-            {tab==="llamadas" && <CallControl data={allData} setData={setSection} onCallLog={onCallLog} role={role} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />}
+            {tab==="inicio" && ACCESS_V2 && v2User && <CommandCenterV2 user={v2User} state={state} appts={state.appts||[]} callLog={state.callLog||{}} contarVentasDemos={contarVentasDemos} canTab={canTab}
+              irA={(t,intent)=>{ setNavIntent(intent?{...intent,tab:t,key:Date.now()}:null); goTo(t); }} />}
+            {tab==="inicio" && !(ACCESS_V2 && v2User) && <Dashboard allData={allData} appts={state.appts||[]} setAppts={setAppts} callLog={state.callLog} agente={agenteActivo} goTo={goTo} incentivos={state.incentivos||[]} cofreConfig={state.cofreConfig} cofreAperturas={state.cofreAperturas||[]} abrirCofre={abrirCofre} rolActivo={rolUsuario} respaldos={state.respaldos||[]} registrarRespaldo={registrarRespaldo} cumpleanos={state.cumpleanos||[]} />}
+            {tab==="agenda" && <Agenda key={ACCESS_V2?(navIntent?.key||"agenda"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} onVentaSync={sincronizarVentaAgenda}
+              init={ACCESS_V2 && navIntent?.tab==="agenda" ? navIntent : null}
+              tiposPermitidos={ACCESS_V2 && v2User ? TIPOS_AGENDA_POR_ROL[v2User.role] : null} />}
+            {tab==="llamadas" && <CallControl key={ACCESS_V2?(navIntent?.key||"llamadas"):undefined} data={allData} setData={setSection} onCallLog={onCallLog} role={role} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario}
+              init={ACCESS_V2 && navIntent?.tab==="llamadas" ? navIntent : null} />}
             {tab==="agregados" && <DBSection data={allData.agregados} setData={fn=>setSection("agregados",fn)} type="agregado" title="Clientes Agregados" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />}
             {tab==="referidos" && <DBSection data={allData.referidos} setData={fn=>setSection("referidos",fn)} type="referido" title="Programa Referidos" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />}
             {tab==="prospectos" && <DBSection data={allData.prospectos} setData={fn=>setSection("prospectos",fn)} type="prospecto" title="Prospección" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />}
             {tab==="distribucion" && <DBSection data={allData.distribucion} setData={fn=>setSection("distribucion",fn)} type="distribucion" title="Bajo Distribución" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} cobranzaClientes={(state.cobranza||{}).clientesData||{}} />}
-            {tab==="reclutamiento" && <RecruitmentSection reclutamiento={state.reclutamiento||[]} setReclutamiento={(fn)=>setState(s=>({...s,reclutamiento:typeof fn==="function"?fn(s.reclutamiento||[]):fn}))} agente={agenteActivo} notify={notify} rolActivo={rolUsuario} setAppts={setAppts} socios={state.socios||[]} setSocios={fn=>setSection("socios",fn)} docsSocios={state.docsSocios||{}} setDocsSocios={fn=>setSection("docsSocios",fn)} />}
+            {tab==="reclutamiento" && <RecruitmentSection key={ACCESS_V2?(navIntent?.key||"reclutamiento"):undefined} init={ACCESS_V2 && navIntent?.tab==="reclutamiento" ? navIntent : null} reclutamiento={state.reclutamiento||[]} setReclutamiento={(fn)=>setState(s=>({...s,reclutamiento:typeof fn==="function"?fn(s.reclutamiento||[]):fn}))} agente={agenteActivo} notify={notify} rolActivo={rolUsuario} setAppts={setAppts} socios={state.socios||[]} setSocios={fn=>setSection("socios",fn)} docsSocios={state.docsSocios||{}} setDocsSocios={fn=>setSection("docsSocios",fn)} />}
             {tab==="cobranza" && <CobranzaSection distribucion={(state.distribucion||[]).filter(c=>!c.eliminado)} cobranza={state.cobranza||{}} setCobranza={(fn)=>setSection("cobranza",fn)} />}
             {tab==="catalogo" && <BuscadorCodigos catalogoCustom={state.catalogoCustom||{}} setCatalogoCustom={(fn)=>setState(st=>({...st,catalogoCustom:typeof fn==="function"?fn(st.catalogoCustom||{}):fn}))} puedeEditar={canDo("catalogo.edit")} />}
             {tab==="simulador" && <SimuladorCompra />}
             {tab==="rutas" && <RutasSection rutas={state.rutas||[]} setRutas={(fn)=>setState(s=>({...s,rutas:typeof fn==="function"?fn(s.rutas||[]):fn}))} allData={allData} agentes={AGENTES} agente={agenteActivo} notify={notify} />}
-            {tab==="servicio" && <ServicioSection appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} notify={notify} allData={allData} />}
+            {tab==="servicio" && <ServicioSection key={ACCESS_V2?(navIntent?.key||"servicio"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} notify={notify} allData={allData}
+              init={ACCESS_V2 && navIntent?.tab==="servicio" ? navIntent : null} />}
             {tab==="control" && <ControlActividad allData={allData} appts={state.appts||[]} reclutamiento={state.reclutamiento||[]} cierres={state.controlCierres||[]} onGuardarCierre={(c)=>setSection("controlCierres",p=>[c,...(p||[])])} />}
-            {tab==="stats" && <Stats data={allData} callLog={state.callLog} appts={state.appts||[]} />}
+            {tab==="stats" && <Stats data={allData} callLog={state.callLog} appts={state.appts||[]} init={ACCESS_V2 && navIntent?.tab==="stats" ? navIntent : null} />}
             {tab==="cumpleanos" && <CumpleSection cumpleanos={state.cumpleanos||[]} setCumple={(fn)=>setState(s=>({...s,cumpleanos:typeof fn==="function"?fn(s.cumpleanos||[]):fn}))} allData={allData} agente={agenteActivo} notify={notify} puedeImportar={true} />}
             {tab==="incentivo" && (puedeGestionarIncentivos
               ? <IncentivosHub incentivos={state.incentivos||[]} setIncentivos={(fn)=>setState(s=>({...s,incentivos:typeof fn==="function"?fn(s.incentivos||[]):fn}))} allData={allData} agentes={AGENTES} notify={notify} rolActivo={rolUsuario} agenteActivo={agenteActivo} cofreConfig={state.cofreConfig} setCofreConfig={setCofreConfig} incentivosCobranza={state.incentivosCobranza||[]} setIncentivosCobranza={(fn)=>setState(s=>({...s,incentivosCobranza:typeof fn==="function"?fn(s.incentivosCobranza||[]):fn}))} incentivosReclut={state.incentivosReclut||[]} setIncentivosReclut={(fn)=>setState(s=>({...s,incentivosReclut:typeof fn==="function"?fn(s.incentivosReclut||[]):fn}))} cobranza={state.cobranza||{}} socios={state.socios||[]} reclutamiento={state.reclutamiento||[]} />
