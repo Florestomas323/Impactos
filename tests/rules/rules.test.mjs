@@ -33,7 +33,7 @@ beforeEach(async () => {
     const rec = (id, section, assignedTo, extra = {}) => f.collection("workspaces").doc(A).collection("records").doc(id)
       .set({ id, appId: A, section, assignedTo, notas: "llamar el martes", assignmentHistory: [], ...extra });
     await rec("a1", "agregados", "yeli"); await rec("a2", "agregados", "lis"); await rec("a3", "agregados", null);
-    await rec("cob_d1", "cobranza", "jova"); await rec("d1", "distribucion", "jova");
+    await rec("cob_d1", "cobranza", "jova", { linkedRecordId: "d1" }); await rec("d1", "distribucion", "yeli");   // mismo cliente, responsables distintos: válido
     await rec("rc1", "reclutamiento", "pedro");
     await f.collection("invitations").doc("nueva@x.com").set({ email: "nueva@x.com", emailNormalized: "nueva@x.com", role: "telemarketing_ventas", appId: A, status: "invited" });
     await f.collection("workspaces").doc(A).collection("shared").doc("incentivos").set({ payload: [] });
@@ -60,16 +60,21 @@ test("Telemarketing Ventas: solo sus registros", async () => {
   await assertFails(q(d, "lis", "agregados"));                           // consultar lo de otra
   await assertFails(d.collection("workspaces").doc(A).collection("records").get()); // toda la base
 });
-test("Cobranza: solo cobranza + distribución asignada", async () => {
+test("Cobranza: SOLO sus cuentas de cobranza (nunca Distribución, que es Ventas)", async () => {
   const d = db("jova");
-  await assertSucceeds(R(d, "cob_d1").get()); await assertSucceeds(R(d, "d1").get());
-  await assertSucceeds(q(d, "jova", "cobranza")); await assertSucceeds(q(d, "jova", "distribucion"));
+  await assertSucceeds(R(d, "cob_d1").get()); await assertSucceeds(q(d, "jova", "cobranza"));
+  await assertFails(R(d, "d1").get()); await assertFails(q(d, "jova", "distribucion"));
   await assertFails(q(d, "jova", "agregados")); await assertFails(R(d, "rc1").get());
+});
+test("Ventas: recibe su Distribución asignada; nunca Cobranza", async () => {
+  const d = db("yeli");
+  await assertSucceeds(R(d, "d1").get()); await assertSucceeds(q(d, "yeli", "distribucion"));
+  await assertFails(R(d, "cob_d1").get()); await assertFails(q(d, "yeli", "cobranza"));
 });
 test("Reclutamiento: solo sus prospectos", async () => {
   const d = db("pedro");
   await assertSucceeds(R(d, "rc1").get()); await assertSucceeds(q(d, "pedro", "reclutamiento"));
-  await assertFails(R(d, "cob_d1").get()); await assertFails(R(d, "a1").get());
+  await assertFails(R(d, "cob_d1").get()); await assertFails(R(d, "a1").get()); await assertFails(R(d, "d1").get());
 });
 test("Usuario inactivo no lee nada; sin perfil tampoco", async () => {
   await assertFails(R(db("inac"), "a1").get());
