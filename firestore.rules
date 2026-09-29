@@ -128,14 +128,124 @@ service cloud.firestore {
       // ── AGENDA ────────────────────────────────────────────────────────────
       match /appts/{apptId} {
         function mine(d) { return d.get('assignedTo', null) == uid() || d.get('createdByUid', null) == uid(); }
+        function tipoDe(d) { return d.get('tipo', d.get('_type', '')); }
+
+        // Tipos de evento que cada telemarketing puede CREAR. MISMA tabla que
+        // TIPOS_AGENDA_POR_ROL (src/services/commandCenter.ts). El staff no tiene esta limitación.
+        function apptTypeAllowed(role, tipo) {
+          return (role == 'telemarketing_ventas'        && tipo in ['cita', 'llamada'])
+              || (role == 'telemarketing_cobranza'      && tipo == 'llamada')
+              || (role == 'telemarketing_reclutamiento' && tipo in ['entrevista', 'llamada']);
+        }
+
+        // ── CREATE de telemarketing: cita "limpia" ──
+        // Nace a su nombre (createdByUid = uid), SIN asignar (assignedTo = null: hoy no existe
+        // asignación de vendedor; así nadie puede hacer visible un cliente a otra TLK), de un
+        // tipo permitido para su rol y sin nada que solo produce el staff o una visita real.
+        // createdByName NO se valida: el UID es la autoridad (el nombre puede cambiarse desde
+        // el servidor con usersCore.rename y la sesión abierta conserva el anterior); el store
+        // lo genera desde el usuario autenticado. Ver docs/ACCESO_V2.md.
+        function camposNoIniciales() {
+          return ['resultado_detalle', 'monto', 'cartucho_meses', 'resultByUid', 'resultByName', 'resultAt',
+                  'cancelledAt', 'cancelledByUid', 'cancelledByName', 'cancelReason',
+                  'reprogramHistory', 'reprogrammedFromApptId', 'createdFrom',
+                  'servicioResultado', 'servicioHistorial',
+                  '_sincronizado', '_clienteId', '_clienteGrupo'];
+        }
+        // ── Registro de origen en CREATE de telemarketing ──
+        // Sin source → cita manual (permitida). Con source → el registro debe existir en ESTE
+        // workspace, con la misma sección, asignado a esta TLK y de SU especialidad.
+        // Ruta real (src/data/schema.ts docIdFor): Cobranza vive en records/cob_<clave>
+        // (la app usa la clave legacy como id); el resto en records/<id>. Referidos: el
+        // documento es el ANFITRIÓN y sourceRefIndex el referido dentro de él.
+        // Mismo mapa que records.sectionAllowed / schema.ts SECTIONS_FOR_ROLE.
+        function seccionDeRol(r, x) {
+          return (r == 'telemarketing_ventas'        && x in ['agregados', 'referidos', 'prospectos', 'distribucion'])
+              || (r == 'telemarketing_cobranza'      && x in ['cobranza'])
+              || (r == 'telemarketing_reclutamiento' && x in ['reclutamiento']);
+        }
+        function sourceDocId(d) {
+          return d.sourceSection == 'cobranza' ? 'cob_' + d.sourceRecordId : d.sourceRecordId;
+        }
+        function sourcePath(d) {
+          return /databases/$(database)/documents/workspaces/$(appId)/records/$(sourceDocId(d));
+        }
+        // sourceRefIndex es la POSICIÓN del referido (la app recorre la lista o, en datos
+        // legacy, los valores del mapa en orden), NO la clave del mapa. Sin índice = cita del
+        // anfitrión (permitida). Con índice: referidos debe existir (lista o mapa) y el índice
+        // debe estar dentro de su tamaño.
+        function refIndexOk(d, rec) {
+          return !d.keys().hasAny(['sourceRefIndex'])
+            || (d.sourceSection == 'referidos' && d.sourceRefIndex is int && d.sourceRefIndex >= 0
+                && (rec.get('referidos', null) is list || rec.get('referidos', null) is map)
+                && d.sourceRefIndex < rec.referidos.size());
+        }
+        function tmSourceOk(d) {
+          return !d.keys().hasAny(['sourceRecordId', 'sourceSection', 'sourceRefIndex'])
+            || (d.get('sourceRecordId', null) is string && d.sourceRecordId.size() > 0
+                && d.get('sourceSection', null) is string
+                && seccionDeRol(me().role, d.sourceSection)
+                && exists(sourcePath(d))
+                && get(sourcePath(d)).data.get('section', null) == d.sourceSection
+                && get(sourcePath(d)).data.get('appId', null) == appId
+                && get(sourcePath(d)).data.get('assignedTo', null) == uid()
+                && refIndexOk(d, get(sourcePath(d)).data));
+        }
+        function tmCreaOk(d) {
+          return d.get('createdByUid', null) == uid()
+            && d.get('assignedTo', null) == null
+            && apptTypeAllowed(me().role, tipoDe(d))
+            && d.get('_type', tipoDe(d)) == tipoDe(d)
+            && d.get('resultado', null) in [null, '']
+            && d.get('status', '') != 'cancelada'
+            && !d.keys().hasAny(camposNoIniciales())
+            && tmSourceOk(d);
+        }
+
+        // ── UPDATE de telemarketing: ALLOWLIST (lo que no está aquí, no se toca) ──
+        // Datos operativos del cliente y la fecha, reprogramar ANTES de la visita y cancelar.
+        // Todo lo demás (id, appId, tipo, _type, assignedTo, createdBy*, source*, resultado y
+        // resultBy*, producto, monto, cartucho_meses, servicio*, _sincronizado, _cliente*,
+        // createdFrom, reprogrammedFromApptId, eliminado y cualquier campo futuro) queda fuera.
+        function tmEditables() {
+          return ['nombre', 'telefono', 'direccion', 'ciudad', 'cp', 'fecha', 'notas',
+                  'reprogramHistory',
+                  'status', 'cancelledAt', 'cancelledByUid', 'cancelledByName', 'cancelReason'];
+        }
+        function camposCancelacion() { return ['status', 'cancelledAt', 'cancelledByUid', 'cancelledByName', 'cancelReason']; }
+        // Cancelar: solo a "cancelada", firmada por quien cancela (cancelledByUid = uid) y con fecha.
+        function tmCancelaOk(n) {
+          return n.get('status', '') == 'cancelada'
+            && n.get('cancelledByUid', null) == uid()
+            && n.get('cancelledAt', '') is string && n.get('cancelledAt', '').size() > 0;
+        }
+        // Reprogramar antes de la visita: cambiar la fecha exige agregar UNA entrada al historial
+        // (se conservan las anteriores), firmada por quien reprograma y con la fecha nueva.
+        function tmReprogramaOk(n, v) {
+          let antes = v.get('reprogramHistory', []);
+          let despues = n.get('reprogramHistory', []);
+          return despues is list && despues.size() == antes.size() + 1
+            && despues.hasAll(antes)
+            && despues[antes.size()].get('changedByUid', null) == uid()
+            && despues[antes.size()].get('reason', '') == 'before_visit'
+            && despues[antes.size()].get('newDate', '') == n.get('fecha', '');
+        }
+        function tmActualizaOk(n, v) {
+          let cambios = n.diff(v).affectedKeys();
+          return mine(v)
+            && v.get('status', '') != 'cancelada'                       // cancelada = solo lectura
+            && v.get('resultado', null) in [null, '']                   // con resultado físico (incl. venta/no_venta) = solo lectura
+            && cambios.hasOnly(tmEditables())
+            && (!cambios.hasAny(camposCancelacion()) || tmCancelaOk(n))
+            && (!cambios.hasAny(['fecha', 'reprogramHistory']) || tmReprogramaOk(n, v));
+        }
+
         allow read:   if staffOrSuper(appId) || (inApp(appId) && mine(resource.data));
         allow create: if request.resource.data.appId == appId
-          && (staffOrSuper(appId) || (inApp(appId) && request.resource.data.createdByUid == uid()));
+          && (staffOrSuper(appId) || (inApp(appId) && tmCreaOk(request.resource.data)));
         allow update: if request.resource.data.appId == appId
-          && (staffOrSuper(appId)
-              || (inApp(appId) && mine(resource.data)
-                  && request.resource.data.get('createdByUid', null) == resource.data.get('createdByUid', null)
-                  && request.resource.data.get('assignedTo', null) == resource.data.get('assignedTo', null)));
+          && (staffOrSuper(appId) || (inApp(appId) && tmActualizaOk(request.resource.data, resource.data)));
+        // Borrado físico: solo administración. El flujo normal es Cancelar (queda en el historial).
         allow delete: if isSuper() || isDistOf(appId);
       }
 
@@ -152,10 +262,10 @@ service cloud.firestore {
             || (me().role == 'telemarketing_cobranza'      && docId in ['cobranza'])
             || (me().role == 'telemarketing_reclutamiento' && docId in ['socios', 'docsSocios']));
         }
+        // Telemarketing Ventas NO escribe ningún shared global (sin rama para Ventas).
         function tmEscribe() {
           return inApp(appId) && (
-               (me().role == 'telemarketing_ventas'        && docId in [])
-            || (me().role == 'telemarketing_cobranza'      && docId in ['cobranza'])
+               (me().role == 'telemarketing_cobranza'      && docId in ['cobranza'])
             || (me().role == 'telemarketing_reclutamiento' && docId in ['socios', 'docsSocios']));
         }
         allow read:  if staffOrSuper(appId) || tmLee();
