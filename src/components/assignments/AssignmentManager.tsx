@@ -13,8 +13,9 @@ import { WorkloadTable } from "./WorkloadTable";
 import { ManualAssignment } from "./ManualAssignment";
 
 const TABS: Array<{ id: AssignmentType; label: string; bases: Array<{ id: string; label: string }> }> = [
-  { id: "ventas", label: "Ventas", bases: [{ id: "agregados", label: "Agregados" }, { id: "prospectos", label: "Prospección" }, { id: "referidos", label: "Referidos" }] },
-  { id: "cobranza", label: "Cobranza", bases: [{ id: "cobranza", label: "Cuentas de cobranza" }, { id: "distribucion", label: "Clientes de Distribución" }] },
+  // Distribución ES ventas. Cobranza es otra especialidad: solo sus cuentas.
+  { id: "ventas", label: "Ventas", bases: [{ id: "agregados", label: "Agregados" }, { id: "prospectos", label: "Prospección" }, { id: "referidos", label: "Referidos" }, { id: "distribucion", label: "Distribución" }] },
+  { id: "cobranza", label: "Cobranza", bases: [{ id: "cobranza", label: "Cuentas de cobranza" }] },
   { id: "reclutamiento", label: "Reclutamiento", bases: [{ id: "reclutamiento", label: "Prospectos de reclutamiento" }] },
 ];
 // Mismos estados que usa ImpactOS (App.tsx).
@@ -66,15 +67,8 @@ export function AssignmentManager({ me, getDB, state, notify }: { me: any; getDB
   const ejecutar = async () => {
     setBusy(true); setResultado("");
     const db = await getDB();
-    // Cobranza: la cuenta y su cliente de Distribución van juntos a la misma persona.
-    const items: Array<{ id: string; expectedAssignedTo: string | null }> = [];
-    seleccion.forEach((r: any) => {
-      items.push({ id: r._docId, expectedAssignedTo: r.assignedTo ?? null });
-      if (base === "cobranza" && r.linkedRecordId) {
-        const d = (state?.distribucion || []).find((x: any) => String(x.id) === String(r.linkedRecordId));
-        if (d && (mode !== "assign" || !d.assignedTo)) items.push({ id: String(d.id), expectedAssignedTo: d.assignedTo ?? null });
-      }
-    });
+    // Cada registro es independiente: Cobranza y Distribución tienen responsables distintos.
+    const items = seleccion.map((r: any) => ({ id: r._docId, expectedAssignedTo: r.assignedTo ?? null }));
     const action = mode === "unassign"
       ? { kind: "unassign" as const, reason: "retirado por " + (me.nombre || "supervisor") }
       : { kind: "assign" as const, toUid: dest!.uid, toName: dest!.nombre, type: tab, allowReassign: mode === "reassign", reason: mode === "reassign" ? "reasignación" : "asignación" };
@@ -168,7 +162,7 @@ export function AssignmentManager({ me, getDB, state, notify }: { me: any; getDB
 
       {confirmar && <Modal title="Confirmar" onClose={() => !busy && setConfirmar(false)}>
         <div className="text-base font-bold text-[#111827] mb-2">{frase}</div>
-        <div className="text-sm text-[#667085] mb-4">{mode === "assign" && dest ? `Se suman a los ${carteraDe(dest.uid)} que ${dest.nombre} ya tiene: no se le quita nada. ` : ""}Solo cambia el responsable. Notas, mensajes, historial, llamadas, citas y seguimientos se conservan tal cual. Queda registrado en el historial de asignaciones.{base === "cobranza" ? " En Cobranza, el cliente de Distribución enlazado va con su cuenta." : ""}</div>
+        <div className="text-sm text-[#667085] mb-4">{mode === "assign" && dest ? `Se suman a los ${carteraDe(dest.uid)} que ${dest.nombre} ya tiene: no se le quita nada. ` : ""}Solo cambia el responsable. Notas, mensajes, historial, llamadas, citas y seguimientos se conservan tal cual. Queda registrado en el historial de asignaciones.</div>
         <PrimaryBtn full disabled={busy} onClick={ejecutar}>{busy ? "Aplicando…" : "Confirmar"}</PrimaryBtn>
       </Modal>}
     </div>
