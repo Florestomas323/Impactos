@@ -104,16 +104,19 @@ test("Telemarketing NUNCA lee shared/rutas ni shared/cumpleanos; staff sí", () 
 });
 test("firestore.rules replica EXACTAMENTE el mapa de schema.ts (lectura y escritura)", () => {
   const rules = fs.readFileSync(new URL("../firestore.rules", import.meta.url), "utf8");
+  const bloque = (fn: string) => rules.slice(rules.indexOf(`function ${fn}()`), rules.indexOf("}", rules.indexOf(`function ${fn}()`)));
+  // Un rol SIN documentos no tiene rama (nunca "docId in []"); con documentos, la lista exacta.
   const lista = (fn: string, role: string) => {
-    const bloque = rules.slice(rules.indexOf(`function ${fn}()`), rules.indexOf("}", rules.indexOf(`function ${fn}()`)));
-    const m = bloque.match(new RegExp(`'${role}'\\s*&& docId in \\[([^\\]]*)\\]`));
-    assert.ok(m, `${fn}: falta ${role}`);
-    return m![1].split(",").map((x) => x.trim().replace(/'/g, "")).filter(Boolean).sort();
+    const m = bloque(fn).match(new RegExp(`'${role}'\\s*&& docId in \\[([^\\]]*)\\]`));
+    if (!m) { assert.ok(!bloque(fn).includes(`'${role}'`), `${fn}: rama de ${role} sin lista`); return []; }
+    return m[1].split(",").map((x) => x.trim().replace(/'/g, "")).filter(Boolean).sort();
   };
+  assert.ok(!/docId in \[\s*\]/.test(rules), "no debe existir la forma vacía docId in []");
   for (const role of Object.keys(SHARED_READ_KEYS_BY_ROLE)) {
     assert.deepEqual(lista("tmLee", role), [...SHARED_READ_KEYS_BY_ROLE[role]].sort(), `lectura ${role}`);
     assert.deepEqual(lista("tmEscribe", role), [...SHARED_WRITE_KEYS_BY_ROLE[role]].sort(), `escritura ${role}`);
   }
+  assert.ok(!bloque("tmEscribe").includes("'telemarketing_ventas'"), "Ventas no tiene rama de escritura en shared");
 });
 test("Rutas del equipo: el staff ve las rutas personales (con creador); la TLK no ve las de otros", () => {
   const d = emptyDocs();

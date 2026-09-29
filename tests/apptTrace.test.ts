@@ -82,16 +82,17 @@ test("Nueva cita sin assignedTo → assignedTo null", () => {
   assert.equal(d.createdByUid, "tlk1"); assert.equal(d.createdByName, "Yelitza");
 });
 
-test("TLK crea cita con assignedTo dist1 → se conserva dist1; la ven la TLK y el distribuidor", () => {
-  // Así llega por setAppts + enrichNewAppts, y así lo guarda el store
+test("TLK crea cita: nace SIN asignar (assignedTo null aunque la app mande otro uid); la ven la TLK y el staff", () => {
+  // Agenda r2: hoy no existe asignación de vendedor; una TLK no puede hacer visible un
+  // cliente a otra persona manipulando assignedTo (store y firestore.rules tmCreaOk).
   const next = enrichNewAppts([], [{ id: "c1", tipo: "cita", fecha: `${HOY}T15:00`, assignedTo: "dist1" }], TLK);
   const op: any = diffState({ appts: [] }, { appts: next }, emptyDocs(), TLKctx).ops[0];
   assert.equal(op.data.createdByUid, "tlk1");
   assert.equal(op.data.createdByName, "Yelitza");
-  assert.equal(op.data.assignedTo, "dist1");               // NO se pierde
-  // TLK la ve por createdByUid; el distribuidor por assignedTo (y como staff ve toda la agenda)
+  assert.equal(op.data.assignedTo, null);
+  // TLK la ve por createdByUid; el staff ve toda la agenda
   assert.ok(esCitaDe(op.data, "tlk1"));
-  assert.ok(esCitaDe(op.data, "dist1"));
+  assert.ok(!esCitaDe(op.data, "dist1"));
   assert.ok(queriesFor({ role: "telemarketing_ventas", uid: "tlk1" }, "appts").some((q) => q.where.some(([f, , v]) => f === "createdByUid" && v === "tlk1")));
   assert.deepEqual(queriesFor({ role: "distribuidor", uid: "dist1" }, "appts"), [{ collection: "appts", where: [] }]);
   assert.equal(ventasResumen({}, [op.data], {}, { uid: "tlk1", nombre: "Yelitza", now: NOW }).citasHoy, 1);
@@ -100,7 +101,9 @@ test("TLK crea cita con assignedTo dist1 → se conserva dist1; la ven la TLK y 
 test("createdByUid siempre es quien la crea, aunque la app mande otro", () => {
   const d = apptDoc({ id: "n2", tipo: "cita", createdByUid: "OTRA", createdByName: "Otra", assignedTo: "dist1" }, undefined, TLKctx);
   assert.equal(d.createdByUid, "tlk1"); assert.equal(d.createdByName, "Yelitza");
-  assert.equal(d.assignedTo, "dist1");
+  assert.equal(d.assignedTo, null);                         // telemarketing: siempre sin asignar
+  // el staff sí conserva la asignación que envíe
+  assert.equal(apptDoc({ id: "n3", tipo: "cita", assignedTo: "dist1" }, undefined, DIST).assignedTo, "dist1");
 });
 
 test("Editar una cita existente conserva su assignedTo", () => {

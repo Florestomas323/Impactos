@@ -58,14 +58,14 @@ test("TLK ventas solo trabaja registros asignados (y ve toda su cartera acumulad
   const ref = items.find((i) => i.section === "referidos")!;
   assert.equal(ref.anfitrion, "Ana"); assert.equal(ref.fuente, "Referido");
 });
-test("Cita agendada genera appt con createdByUid, sourceRecordId y sourceSection; no pisa el assignedTo del distribuidor", () => {
+test("Cita agendada genera appt con createdByUid, sourceRecordId y sourceSection; la TLK la crea SIN asignar (r2)", () => {
   const it = itemsDe({ prospectos: [reg("p9")] }, "ventas", "tlk1")[0];
   const cita = { nombre: it.nombre, telefono: it.telefono, fecha: "2026-09-26T18:00", tipo: "cita", assignedTo: "dist1" };
   const nuevas = enrichNewAppts([], [{ ...cita, ...trazaRegistro(it), id: "c1", _type: "cita" }], TLK);
   const doc = apptDoc(nuevas[0], undefined, { uid: "tlk1", role: "telemarketing_ventas", appId: "impactos", nombre: "Yelitza" });
   assert.equal(doc.createdByUid, "tlk1"); assert.equal(doc.createdByName, "Yelitza");
   assert.equal(doc.sourceRecordId, "p9"); assert.equal(doc.sourceSection, "prospectos");
-  assert.equal(doc.assignedTo, "dist1");
+  assert.equal(doc.assignedTo, null);                   // Agenda r2: TLK no asigna (firestore.rules tmCreaOk)
   // y el registro queda con la cita y el seguimiento cerrado
   const r = aplicarResultado({ ...it.raw, proximo_seguimiento: hace(2) }, "ventas", "cita_agendada", { fechaCita: cita.fecha }, TLK, NOW);
   assert.equal(r.estado, "verde"); assert.equal(r.proximo_seguimiento, ""); assert.equal(r.ultima_cita_programada, "2026-09-26T18:00");
