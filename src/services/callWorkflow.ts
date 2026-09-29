@@ -369,3 +369,96 @@ export function kpis(items: Item[], esp: Especialidad, uid: string, now = new Da
 
 // ── Estado nuevo SIN tocar el seguimiento (v2) ──────────────────────────────
 export const cambiarEstadoV2 = (rec: any, estado: string) => ({ ...rec, estado, actualizado: new Date().toISOString() });
+
+// ════════ FILTROS Y RESUMEN DE CARTERA (pantalla Llamadas v2) ════════
+// Todo se calcula sobre itemsDe(...): la cartera REAL asignada. Nunca amplía assignedTo.
+export const PAGINA = 40;                                   // resultados por tanda ("Ver más")
+
+export type Filtros = { q?: string; estados?: string[]; resultados?: string[]; ciudades?: string[]; zips?: string[] };
+export const sinFiltros = (f: Filtros = {}) => !(f.q || "").trim() && !(f.estados || []).length && !(f.resultados || []).length && !(f.ciudades || []).length && !(f.zips || []).length;
+
+const normTxt = (s: any) => String(s ?? "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+export const claveCiudad = (s: any) => normTxt(s);
+export const zip5 = (s: any) => String(s ?? "").replace(/\D/g, "").slice(0, 5);
+
+// Búsqueda por nombre, teléfono o cuenta (mismo criterio que la pantalla).
+export function coincideTexto(it: Item, q: string) {
+  const t = normTxt(q), d = String(q || "").replace(/\D/g, "");
+  if (!t) return true;
+  return normTxt(it.nombre).includes(t) || normTxt(it.ciudad).includes(t)
+    || (d.length >= 3 && String(it.telefono || "").replace(/\D/g, "").includes(d))
+    || normTxt(it.raw?.cuenta || it.raw?.nroCuenta || it.raw?.numeroCuenta).includes(t);
+}
+
+// Zona: ciudades elegidas; si en una ciudad se eligieron ZIPs, esa ciudad se
+// limita a esos ZIPs (las demás ciudades elegidas van completas).
+function coincideZona(it: Item, ciudades: string[], zips: string[], zipsDeCiudad: Map<string, Set<string>>) {
+  const c = claveCiudad(it.ciudad), z = zip5(it.cp);
+  if (ciudades.length && !ciudades.includes(c)) return false;
+  if (!zips.length) return true;
+  if (!ciudades.length) return zips.includes(z);
+  // ¿esta ciudad tiene ZIPs elegidos? (un ZIP "pertenece" a las ciudades donde aparece)
+  const propios = zipsDeCiudad.get(c) || new Set<string>();
+  return zips.includes(z) || !zips.some((zz) => propios.has(zz));
+}
+
+// Aplica TODOS los filtros a la vez (intersección). Sin filtros → la misma lista.
+export function filtrarItems<T extends Item>(items: T[], f: Filtros = {}): T[] {
+  const estados = f.estados || [], resultados = f.resultados || [];
+  const ciudades = (f.ciudades || []).map(claveCiudad), zips = (f.zips || []).map(zip5);
+  const zipsDeCiudad = new Map<string, Set<string>>();
+  items.forEach((it) => { const c = claveCiudad(it.ciudad); if (!zipsDeCiudad.has(c)) zipsDeCiudad.set(c, new Set()); const z = zip5(it.cp); if (z) zipsDeCiudad.get(c)!.add(z); });
+  return items.filter((it) =>
+    coincideTexto(it, f.q || "")
+    && (!estados.length || estados.includes(it.estado || "sin_estado"))          // ESTADO del registro
+    && (!resultados.length || resultados.includes(it.raw?.ultimoResultado))     // ÚLTIMO RESULTADO de llamada (otro dato)
+    && coincideZona(it, ciudades, zips, zipsDeCiudad));
+}
+
+// Conteo por estado sobre el catálogo real (incluye los de 0) + estados fuera de catálogo.
+export function conteoEstados(items: Item[], catalogo: string[]) {
+  const n: Record<string, number> = {};
+  items.forEach((it) => { const e = it.estado || "sin_estado"; n[e] = (n[e] || 0) + 1; });
+  const extras = Object.keys(n).filter((e) => !catalogo.includes(e));
+  return [...catalogo, ...extras].map((id) => ({ id, n: n[id] || 0 }));
+}
+export function conteoResultados(items: Item[], esp: Especialidad) {
+  return RESULTADOS[esp].map((r) => ({ id: r.id, label: r.label, n: items.filter((it) => it.raw?.ultimoResultado === r.id).length }));
+}
+// Ciudades (con su nombre como aparece más veces) y sus ZIPs, solo de la cartera dada.
+export function opcionesZona(items: Item[]) {
+  const m = new Map<string, { nombres: Record<string, number>; n: number; zips: Record<string, number> }>();
+  items.forEach((it) => {
+    const nombre = String(it.ciudad || "").trim(); const c = claveCiudad(nombre);
+    if (!m.has(c)) m.set(c, { nombres: {}, n: 0, zips: {} });
+    const g = m.get(c)!; g.n++; g.nombres[nombre || "Sin ciudad"] = (g.nombres[nombre || "Sin ciudad"] || 0) + 1;
+    const z = zip5(it.cp); if (z) g.zips[z] = (g.zips[z] || 0) + 1;
+  });
+  return [...m.entries()].map(([clave, g]) => ({
+    clave, nombre: Object.entries(g.nombres).sort((a, b) => b[1] - a[1])[0][0], n: g.n,
+    zips: Object.entries(g.zips).map(([zip, n]) => ({ zip, n })).sort((a, b) => b.n - a.n || a.zip.localeCompare(b.zip)),
+  })).sort((a, b) => b.n - a.n || a.nombre.localeCompare(b.nombre));
+}
+
+// ¿Dónde está cada registro de la cartera? Una sola categoría por registro, con precedencia:
+// En prioridad > Número inválido > Sin datos > Cerrado > Cita agendada > Seguimiento futuro > Otros
+export type Categoria = "prioridad" | "invalido" | "sinDatos" | "cerrado" | "cita" | "seguimientoFuturo" | "otros";
+export const CATEGORIA_LABEL: Record<Categoria, string> = {
+  prioridad: "para trabajar ahora", invalido: "número inválido", sinDatos: "sin datos", cerrado: "cerrados",
+  cita: "con cita", seguimientoFuturo: "seguimiento futuro", otros: "otros",
+};
+export function categoriaDe(it: Item, enPrioridad: boolean, esp: Especialidad, now = new Date()): Categoria {
+  if (enPrioridad) return "prioridad";
+  if (it.invalido) return "invalido";
+  if (it.sinDatos) return "sinDatos";
+  if (it.cerrado) return "cerrado";
+  if (esp === "ventas" && it.estado === "verde") return "cita";
+  if (it.proximo && it.proximo > diaLocal(now)) return "seguimientoFuturo";
+  return "otros";
+}
+export function resumenCartera(items: Item[], prio: Array<{ key: string }>, esp: Especialidad, now = new Date()) {
+  const enPrio = new Set(prio.map((p) => p.key));
+  const cuenta: Record<Categoria, number> = { prioridad: 0, invalido: 0, sinDatos: 0, cerrado: 0, cita: 0, seguimientoFuturo: 0, otros: 0 };
+  items.forEach((it) => { cuenta[categoriaDe(it, enPrio.has(it.key), esp, now)]++; });
+  return { total: items.length, ...cuenta };
+}
