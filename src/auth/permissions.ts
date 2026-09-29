@@ -38,7 +38,7 @@ export const PERMISSIONS: Record<Role, string[]> = {
   ],
 
   telemarketing_cobranza: [
-    "dashboard.view", "cobranza.view", "cobranza.edit", "clientes_distribucion.assigned.view",
+    "dashboard.view", "cobranza.view", "cobranza.edit",
     "llamadas.use", "notas.create", "agenda.manage", "config.view",
   ],
 
@@ -69,8 +69,8 @@ export const RECORD_SECTIONS = ["agregados", "referidos", "prospectos", "distrib
 export type RecordSection = (typeof RECORD_SECTIONS)[number];
 
 const SECTIONS_BY_TYPE: Record<string, RecordSection[]> = {
-  ventas: ["agregados", "referidos", "prospectos", "appts"],
-  cobranza: ["cobranza", "distribucion", "appts"],
+  ventas: ["agregados", "referidos", "prospectos", "distribucion", "appts"],   // Distribución ES ventas
+  cobranza: ["cobranza", "appts"],
   reclutamiento: ["reclutamiento", "appts"],
 };
 
@@ -91,7 +91,7 @@ export const TAB_PERMISSIONS: Record<string, string[]> = {
   agregados: ["clientes.view", "clientes.assigned.view"],
   referidos: ["referidos.manage", "clientes.view", "clientes.assigned.view"],
   prospectos: ["clientes.view", "clientes.assigned.view"],
-  distribucion: ["clientes.view", "clientes_distribucion.assigned.view"],
+  distribucion: ["clientes.view", "clientes.assigned.view"],
   reclutamiento: ["reclutamiento.view", "reclutamiento.assigned.view"],
   cobranza: ["cobranza.view"],
   catalogo: ["catalogo.view"],
