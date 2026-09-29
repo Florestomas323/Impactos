@@ -93,8 +93,9 @@ service cloud.firestore {
         }
         // Mismo mapa que src/data/schema.ts (SECTIONS_FOR_ROLE).
         function sectionAllowed(r, x) {
-          return (r == 'telemarketing_ventas'        && x in ['agregados', 'referidos', 'prospectos'])
-              || (r == 'telemarketing_cobranza'      && x in ['cobranza', 'distribucion'])
+          // Distribución ES ventas; Cobranza es otra especialidad (solo sus cuentas).
+          return (r == 'telemarketing_ventas'        && x in ['agregados', 'referidos', 'prospectos', 'distribucion'])
+              || (r == 'telemarketing_cobranza'      && x in ['cobranza'])
               || (r == 'telemarketing_reclutamiento' && x in ['reclutamiento']);
         }
         function tmOn(x) { return inApp(appId) && sectionAllowed(me().role, x); }
