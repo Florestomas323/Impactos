@@ -28,8 +28,8 @@ Invitación pendiente ocupa cupo; `suspended` lo conserva; `inactive` lo libera.
 | Súper Admin | todo, todas las apps | todas |
 | Distribuidor | toda su app | todas, incluidas Usuarios y Distribución de datos |
 | Supervisor | toda su app | bases, Distribución de datos, equipo, estadísticas (no Usuarios, no Cobranza/Reclutamiento en menú) |
-| TM Ventas | solo agregados/referidos/prospectos asignados | Agregados, Referidos, Prospección, Llamadas, Agenda |
-| TM Cobranza | solo cuentas de cobranza + clientes de Distribución asignados | Cobranza, Distribución, Llamadas, Agenda |
+| TM Ventas | solo agregados/referidos/prospectos/**distribución** asignados | Agregados, Referidos, Prospección, Distribución, Llamadas, Agenda |
+| TM Cobranza | **solo** cuentas de cobranza asignadas | Cobranza, Llamadas, Agenda |
 | TM Reclutamiento | solo prospectos de reclutamiento asignados | Reclutamiento, Llamadas, Agenda |
 
 ## Modelo de datos
@@ -44,7 +44,9 @@ workspaces/{appId}/userData/{uid}  conteo de llamadas de cada persona
 workspaces/{appId}/audit/{id}      bitácora del servidor
 crm_telemarketing/*                sistema viejo: congelado, nunca se borra
 ```
-- Cobranza: cada entrada de `clientesData` es `records/cob_<id>` con `linkedRecordId` al cliente de Distribución. La config va a `shared/cobranza`.
+- **Distribución ES Ventas. Cobranza es otra especialidad.** Una misma persona puede tener a la vez un responsable de Ventas (su registro de Distribución) y uno de Cobranza (su cuenta), sin conflicto: se asignan por separado.
+- Cobranza: cada entrada de `clientesData` es `records/cob_<id>`. `linkedRecordId` apunta al cliente de Distribución **solo como identidad** (no implica mismo responsable, cola ni especialidad). La config va a `shared/cobranza`.
+- Cobranza es **autosuficiente para llamar**: la migración (y el guardado v2 de cuentas nuevas) copia, sin sobrescribir, nombre/teléfono/cuenta/dirección/ciudad/cp del cliente enlazado (`contactoCopiadoDe` indica qué se copió). Nada comercial (ventas, notas, historial) viaja.
 - Llamadas: el histórico viejo queda en `shared/callLog` (solo lectura); lo nuevo, en `userData/{uid}`. La app ve la suma.
 - **No se migra:** `cuentasCustom`, `usuariosCustom`, `preguntasSeguridad` (sistema de acceso viejo) y `respaldos` (puede superar 1 MB; queda en `crm_telemarketing`). ⚠️ Pendiente tu aprobación sobre `respaldos`.
 
@@ -92,7 +94,8 @@ El proyecto de Vercel de producción **no se toca**: sin esas variables sigue ig
 - [ ] Correo no invitado ve "Cuenta sin acceso"
 - [ ] Desactivar a alguien con la app abierta: sale al instante
 - [ ] TM Ventas ve solo sus registros; no ve Cobranza ni Reclutamiento
-- [ ] TM Cobranza ve solo Cobranza + Distribución asignada
+- [ ] TM Cobranza ve solo sus cuentas de Cobranza (con nombre y teléfono), nunca Distribución
+- [ ] TM Ventas ve su Distribución asignada, nunca Cobranza
 - [ ] TM Reclutamiento ve solo sus prospectos
 - [ ] Asignar 30 "ya contactados, sin venta, +30 días" a una TM
 - [ ] Reasignar esos registros a otra TM: notas, historial y seguimientos intactos
