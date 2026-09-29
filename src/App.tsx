@@ -17,7 +17,9 @@ import { V2ErrorBoundary } from "./components/V2ErrorBoundary";
 import { NavV2 } from "./components/NavV2";
 import { CommandCenterV2 } from "./components/dashboard/CommandCenterV2";
 import { TIPOS_AGENDA_POR_ROL, PERIODO_LABEL, periodoSoportado } from "./services/commandCenter";
-import { enrichNewAppts } from "./services/apptTrace";
+import { enrichNewAppts, trazaRegistro } from "./services/apptTrace";
+import { CallCenterV2 } from "./components/calls/CallCenterV2";
+import { especialidadDe } from "./services/callWorkflow";
 import { BRAND } from "./theme";
 import { asList } from "./services/assignments";
 
@@ -3439,7 +3441,7 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
   const handleSchedule=appt=>{
     setCalMsg("");
     window.open(gcalLink(appt),"_blank");
-    if(setAppts) setAppts(p=>[{...appt,id:genId(),_type:appt.tipo},...p]);
+    if(setAppts) setAppts(p=>[{...appt,...(ACCESS_V2&&scheduleClient?trazaRegistro({...scheduleClient, section:scheduleClient._tipo||({agregado:"agregados",prospecto:"prospectos",referido:"referidos",distribucion:"distribucion"})[type]}):{}),id:genId(),_type:appt.tipo},...p]); // v2: cita ligada a su registro
 
     // ── OBJETIVO 3: Actualizar tarjeta del cliente con datos del appt ──
     if(scheduleClient){
@@ -5139,7 +5141,8 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts,
     // Seguimiento vencido
     const dvReal=c.proximo_seguimiento && c.proximo_seguimiento<hoyISO ? diasVencido(c.proximo_seguimiento) : 0;
     // Un recordatorio vencido solo vive 2 días en prioridad; después sale solo.
-    const dv = dvReal>0 && dvReal<=2 ? dvReal : 0;
+    // v2: un seguimiento vencido NO desaparece por antigüedad (solo al completarlo/reprogramarlo).
+    const dv = ACCESS_V2 ? Math.max(0, dvReal) : (dvReal>0 && dvReal<=2 ? dvReal : 0);
     if(dv>0){ motivos.push(`Vencido hace ${dv} día${dv!==1?"s":""}`); vencidos.push({...c,_diasVencido:dv}); }
     if(motivos.length>0 && !(motivos.length===1 && dv>0)){
       // Va a Prioridad Hoy si tiene algo de HOY (no solo vencido)
@@ -5177,11 +5180,11 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts,
   const updateStatus=(id,tipo,status)=>{
     if(tipo==="referidos"){
       const [refDe,refIdx]=id.split("::");
-      updateReferido(refDe, +refIdx, {estado:status, proximo_seguimiento:""});
+      updateReferido(refDe, +refIdx, ACCESS_V2 ? {estado:status} : {estado:status, proximo_seguimiento:""}); // v2: cambiar estado no borra el seguimiento
     } else {
       // Al cambiar el estado, el recordatorio/seguimiento se limpia → el cliente
       // SALE de la lista de prioridad automáticamente.
-      setData(tipo,p=>p.map(x=>x.id===id?{...x,estado:status, proximo_seguimiento:""}:x));
+      setData(tipo,p=>p.map(x=>x.id===id?(ACCESS_V2?{...x,estado:status}:{...x,estado:status, proximo_seguimiento:""}):x)); // v2: no borra el seguimiento
     }
   };
   const saveHistorial=(id,tipo,entry)=>{
@@ -5258,7 +5261,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts,
   const openSchedule=(client,tipo=null)=>{setScheduleClient(client);setForceTipo(tipo);};
   const handleSchedule=appt=>{
     window.open(gcalLink(appt),"_blank");
-    if(setAppts) setAppts(p=>[{...appt,id:genId(),_type:appt.tipo},...p]);
+    if(setAppts) setAppts(p=>[{...appt,...(ACCESS_V2?trazaRegistro(scheduleClient):{}),id:genId(),_type:appt.tipo},...p]); // v2: cita ligada a su registro
 
     // Guardar info de la cita en la tarjeta del cliente (igual que DBSection)
     if(scheduleClient){
@@ -5332,7 +5335,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts,
     const out=[];
     const push=(nombre,fuente,h,anfitrion)=>{
       // Cuenta llamadas Y cambios de estado (ambos significan que hubo contacto)
-      if(h.tipo!=="llamada" && h.tipo!=="estado") return;
+      if(h.tipo!=="llamada" && (ACCESS_V2 || h.tipo!=="estado")) return; // v2: un cambio de estado NO es una llamada
       if(soloHoy && diaLocal(h.fecha)!==hoyStr) return;
       out.push({nombre, fuente, anfitrion, estado:h.estado, notas:h.notas, fecha:h.fecha, agente:h.agente, tipo:h.tipo});
     };
@@ -5976,7 +5979,7 @@ function RecruitmentSection({ reclutamiento, setReclutamiento, agente, notify, r
   const setCampo=(id,patch)=>setReclutamiento(p=>p.map(r=>r.id===id?{...r,...patch,actualizado:new Date().toISOString()}:r));
   const [agendarPros,setAgendarPros]=useState(null);
   const onAgendarEntrevista=(datos)=>{
-    const appt={ id:genId(), tipo:"entrevista", _type:"entrevista", nombre:datos.nombre, telefono:datos.telefono, fecha:datos.fecha, notas:datos.notas, attendees:datos.attendees, agente:agente||"" };
+    const appt={ id:genId(), tipo:"entrevista", _type:"entrevista", nombre:datos.nombre, telefono:datos.telefono, fecha:datos.fecha, notas:datos.notas, attendees:datos.attendees, agente:agente||"", ...(ACCESS_V2&&agendarPros?.id?trazaRegistro({section:"reclutamiento", id:agendarPros.id}):{}) };
     if(setAppts) setAppts(p=>[appt,...p]);
     if(agendarPros?.id) setCampo(agendarPros.id,{ entrevista_agendada:datos.fecha });
     try{ window.open(gcalLink(appt),"_blank"); }catch(e){}
@@ -8942,7 +8945,9 @@ function AppRoot() {
             {tab==="agenda" && <Agenda key={ACCESS_V2?(navIntent?.key||"agenda"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} onVentaSync={sincronizarVentaAgenda}
               init={ACCESS_V2 && navIntent?.tab==="agenda" ? navIntent : null}
               tiposPermitidos={ACCESS_V2 && v2User ? TIPOS_AGENDA_POR_ROL[v2User.role] : null} />}
-            {tab==="llamadas" && <CallControl key={ACCESS_V2?(navIntent?.key||"llamadas"):undefined} data={allData} setData={setSection} onCallLog={onCallLog} role={role} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario}
+            {tab==="llamadas" && ACCESS_V2 && v2User && especialidadDe(v2User.role) && <CallCenterV2 user={v2User} esp={especialidadDe(v2User.role)} state={state}
+              setSection={setSection} setAppts={setAppts} onCallLog={onCallLog} gcalLink={gcalLink} AppointmentForm={AppointmentForm} EntrevistaModal={EntrevistaModal} estadoLabel={STATUS_COLORS} />}
+            {tab==="llamadas" && !(ACCESS_V2 && v2User && especialidadDe(v2User.role)) && <CallControl key={ACCESS_V2?(navIntent?.key||"llamadas"):undefined} data={allData} setData={setSection} onCallLog={onCallLog} role={role} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario}
               init={ACCESS_V2 && navIntent?.tab==="llamadas" ? navIntent : null} />}
             {tab==="agregados" && <DBSection data={allData.agregados} setData={fn=>setSection("agregados",fn)} type="agregado" title="Clientes Agregados" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />}
             {tab==="referidos" && <DBSection data={allData.referidos} setData={fn=>setSection("referidos",fn)} type="referido" title="Programa Referidos" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />}
