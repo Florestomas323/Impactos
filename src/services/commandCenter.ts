@@ -5,6 +5,7 @@
 //  • Lectura segura de listas históricas (asList): no se modifica ningún dato.
 import { asList, wasWorked, deriveWorkStatus } from "./assignments";
 import { esCitaDe } from "./apptTrace";
+import { diaLocal as diaCitaLocal } from "./agendaV2";
 
 // ── Resultados de cita ──────────────────────────────────────────────────────
 // Visita REALIZADA = se fue físicamente al domicilio.
@@ -13,7 +14,8 @@ import { esCitaDe } from "./apptTrace";
 //    contarVentasDemos ya trata como demos; sin ellos Demos podría superar a Visitas).
 //   NO cuentan: no_visito, reset, recompra, sin resultado, o cualquier otro.
 // Demo = demo_venta, demo_no_venta (y sus nombres viejos).
-export const RESULTADOS_VISITA = ["demo_venta", "demo_no_venta", "no_recibio", "seguimiento", "venta", "no_venta"];
+// "reprogramada_visita": hubo presencia física (cuenta VISITA) pero no demo ni venta.
+export const RESULTADOS_VISITA = ["demo_venta", "demo_no_venta", "no_recibio", "seguimiento", "reprogramada_visita", "venta", "no_venta"];
 export const RESULTADOS_DEMO = ["demo_venta", "demo_no_venta", "venta", "no_venta"];
 export const esVisitaRealizada = (resultado: any) => RESULTADOS_VISITA.includes(String(resultado || ""));
 
@@ -23,11 +25,14 @@ type Ctx = { uid: string; nombre: string; now?: Date };
 const p2 = (n: number) => String(n).padStart(2, "0");
 export const diaLocal = (d: Date) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
 // Citas: la fecha ya viene en hora local ("2026-09-24T15:00"), igual que usa Agenda.
-const diaAppt = (a: any) => String(a?.fecha || "").slice(0, 10);
+// (si alguna vino en ISO con zona, se pasa al día local: services/agendaV2.fechaLocal)
+const diaAppt = (a: any) => diaCitaLocal(a?.fecha);
 // Historial: puede venir en ISO UTC; se pasa al día local.
 const diaHist = (f: any) => { if (!f) return ""; const d = new Date(f); return isNaN(d.getTime()) ? String(f).slice(0, 10) : diaLocal(d); };
 const tipoAppt = (a: any) => a?.tipo || a?._type || "";
 const vivos = (arr: any) => asList(arr).filter((r: any) => r && !r.eliminado);
+// Citas canceladas: quedan en el historial de la Agenda, pero no son visitas activas ni métricas.
+const activas = (appts: any) => vivos(appts).filter((a: any) => a.status !== "cancelada");
 
 export function rango(periodo: Periodo, now = new Date()) {
   const hoy = diaLocal(now);
@@ -41,7 +46,7 @@ const dentro = (dia: string, r: { desde: string; hasta: string }) => !!dia && di
 export function staffResumen(state: any, appts: any[], now = new Date()) {
   const hoy = diaLocal(now);
   const manana = diaLocal(new Date(now.getTime() + 86400000));
-  const A = vivos(appts);
+  const A = activas(appts);
   const deHoy = (t: string) => A.filter((a: any) => tipoAppt(a) === t && diaAppt(a) === hoy);
   // Entrevistas: misma fuente que muestra Reclutamiento → Entrevistas.
   const entrevistas = vivos(state?.reclutamiento).filter((r: any) => r.entrevista_agendada);
@@ -79,20 +84,20 @@ export function embudoComercial(state: any, appts: any[], periodo: Periodo, cont
   // Visita realizada = cita con resultado que no sea "no se visitó" (misma regla de exclusión
   // de citas ya sincronizadas que usa contarVentasDemos, para no contar dos veces).
   let visitas = 0;
-  vivos(appts).forEach((a: any) => {
+  activas(appts).forEach((a: any) => {
     if (a._sincronizado || tipoAppt(a) !== "cita" || !dentro(diaAppt(a), r)) return;
     if (esVisitaRealizada(a.resultado)) visitas++;
   });
   clientes.forEach((c: any) => asList(c.historial).forEach((h: any) => {
     if (h && esVisitaRealizada(h.cita_resultado) && dentro(diaHist(h.fecha), r)) visitas++;
   }));
-  const { demos, ventas, volumen } = contarVentasDemos({ appts: vivos(appts), clientes, enP: (f: any) => dentro(diaHist(f), r) });
+  const { demos, ventas, volumen } = contarVentasDemos({ appts: activas(appts), clientes, enP: (f: any) => dentro(diaHist(f), r) });
   return { visitas, demos, ventas, volumen };
 }
 
 // ── Telemarketing ───────────────────────────────────────────────────────────
 const mios = (arr: any, uid: string) => vivos(arr).filter((r: any) => r.assignedTo === uid);
-const misAppts = (appts: any[], c: Ctx) => vivos(appts).filter((a: any) => esCitaDe(a, c.uid));
+const misAppts = (appts: any[], c: Ctx) => activas(appts).filter((a: any) => esCitaDe(a, c.uid));
 
 export function ventasResumen(state: any, appts: any[], callLog: any, c: Ctx) {
   const now = c.now || new Date(); const hoy = diaLocal(now);
