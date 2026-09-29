@@ -18,6 +18,8 @@ import { NavV2 } from "./components/NavV2";
 import { CommandCenterV2 } from "./components/dashboard/CommandCenterV2";
 import { TIPOS_AGENDA_POR_ROL, PERIODO_LABEL, periodoSoportado } from "./services/commandCenter";
 import { enrichNewAppts, trazaRegistro } from "./services/apptTrace";
+import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEvento, fechaLocal as fechaLocalV2, reprogramarAntesDeVisita, reprogramarDesdeVisita, registrarResultado as registrarResultadoV2, cancelarCita as cancelarCitaV2, enFiltro, agendaCounters, isPastAppt, canRecordVisitResult, canHardDelete, duplicateApptCandidate } from "./services/agendaV2";
+import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
 import { RutasEquipoV2 } from "./components/rutas/RutasEquipoV2";
 import { rutaPersonalV2, resolverRutaPersonal } from "./services/rutasV2";
@@ -450,6 +452,7 @@ const RESULTADO_STYLE = {
   no_recibio:    { ico:"🚪", label:"No recibió",          style:{background:"#dc2626",color:"#fff"} },
   no_visito:     { ico:"🚷", label:"No se visitó",        style:{background:"#9333ea",color:"#fff"} },
   seguimiento:   { ico:"📅", label:"Llamar más adelante", style:{background:"#f97316",color:"#fff"} },
+  reprogramada_visita: { ico:"🔁", label:"Reprogramada en visita", style:{background:"#0891b2",color:"#fff"} },
   reset:         { ico:"🔄", label:"Re-agendada",         style:{background:"#0891b2",color:"#fff"} },
   // Compatibilidad con datos antiguos guardados en Firebase:
   venta:         { ico:"💰", label:"Demo / venta",        style:{background:"#047857",color:"#fff"} },
@@ -1113,7 +1116,7 @@ function gcalLink(appt) {
   const end   = new Date(start.getTime() + 3600000);
   const cfg   = EVENT_CONFIG[appt.tipo] || EVENT_CONFIG.cita;
   const guestList = (appt.invitados||[]).filter(Boolean).join(", ");
-  const details = [
+  const details = ACCESS_V2 ? [...detallesEvento(appt), guestList ? `Invitados cocinada: ${guestList}` : ""].filter(Boolean).join("\n") : [
     `Tel: ${appt.telefono||"—"}`,
     `Producto: ${appt.producto||"—"}`,
     appt.cuenta ? `Cuenta: ${appt.cuenta}` : "",
@@ -1822,11 +1825,13 @@ const TEAM_CONTACTS = [
 ];
 
 function AppointmentForm({ client, onSave, onClose, loading, forceTipo, agenteActivo="" }) {
-  const today = new Date().toISOString().slice(0,16);
+  // v2: hora LOCAL (toISOString es UTC: en Texas, de noche el valor caía en el día siguiente).
+  const today = ACCESS_V2 ? localDateTimeValue() : new Date().toISOString().slice(0,16);
 
   // Build default attendees based on event type
+  // v2: sin invitados automáticos de correos fijos (TEAM_CONTACTS es de la app legacy).
   const buildDefaultAttendees = (tipo) =>
-    TEAM_CONTACTS.filter(c => c.default[tipo||"cita"]).map(c => c.email);
+    ACCESS_V2 ? [] : TEAM_CONTACTS.filter(c => c.default[tipo||"cita"]).map(c => c.email);
 
   const [d, setD] = useState({
     nombre:client?.nombre||"", telefono:client?.telefono||"",
@@ -1952,7 +1957,10 @@ function AppointmentForm({ client, onSave, onClose, loading, forceTipo, agenteAc
 
       <div className="grid grid-cols-2 gap-3">
         <Field label="Fecha y hora" required><input type="datetime-local" className={inpLight} value={d.fecha} onChange={e=>set("fecha",e.target.value)} /></Field>
-        <Field label="Vendedor/a"><input className={inpLight} placeholder="quién atiende" value={d.agente} onChange={e=>set("agente",e.target.value)} /></Field>
+        {ACCESS_V2 && d.tipo==="cita"
+          // v2: quien agenda NO es necesariamente quien visita → solo se informa, no se edita.
+          ? <Field label="Agendada por"><div className={inpLight+" bg-[#f8fafc] text-slate-600"}>{agenteActivo||"—"}</div></Field>
+          : <Field label="Vendedor/a"><input className={inpLight} placeholder="quién atiende" value={d.agente} onChange={e=>set("agente",e.target.value)} /></Field>}
       </div>
       <Field label="Notas"><textarea className={inpLight+" resize-none"} rows={2} value={d.notas} onChange={e=>set("notas",e.target.value)} /></Field>
       </>
@@ -1966,7 +1974,7 @@ function AppointmentForm({ client, onSave, onClose, loading, forceTipo, agenteAc
 
         {/* Team checkboxes */}
         <div className="space-y-2 mb-3">
-          {TEAM_CONTACTS.map(tc=>{
+          {(ACCESS_V2 ? [] : TEAM_CONTACTS).map(tc=>{
             const on = d.attendees.includes(tc.email);
             return (
               <label key={tc.email} onClick={()=>toggleAttendee(tc.email)}
@@ -1996,9 +2004,9 @@ function AppointmentForm({ client, onSave, onClose, loading, forceTipo, agenteAc
         </div>
 
         {/* Extra (non-team) attendees */}
-        {d.attendees.filter(e=>!TEAM_CONTACTS.map(t=>t.email).includes(e)).length>0 && (
+        {d.attendees.filter(e=>ACCESS_V2 || !TEAM_CONTACTS.map(t=>t.email).includes(e)).length>0 && (
           <div className="mt-2 flex flex-wrap gap-2">
-            {d.attendees.filter(e=>!TEAM_CONTACTS.map(t=>t.email).includes(e)).map(e=>(
+            {d.attendees.filter(e=>ACCESS_V2 || !TEAM_CONTACTS.map(t=>t.email).includes(e)).map(e=>(
               <span key={e} className="inline-flex items-center gap-1 bg-[#f4f6f9] text-[#1f2d3d] text-xs font-bold px-2.5 py-1 rounded-full border border-[#e5def4]">
                 <Ico e="✉" className="mr-1.5" />{e}
                 <button type="button" onClick={()=>removeAttendee(e)} className="text-red-400 ml-1 hover:text-red-600 font-bold"><Ico e="✕" /></button>
@@ -2017,7 +2025,7 @@ function AppointmentForm({ client, onSave, onClose, loading, forceTipo, agenteAc
 
       <div className="flex gap-2 pt-1">
         <button type="submit" disabled={loading} className="flex-1 px-4 py-2.5 rounded-lg text-sm font-bold text-white hover:brightness-110 disabled:opacity-50"
-          style={{background:cfg.color}}>{loading?<><Ico e="⏳" className="mr-1" />Guardando…</>:<><Ico e="📅" className="mr-1" />Guardar en Google Calendar</>}</button>
+          style={{background:cfg.color}}>{loading?<><Ico e="⏳" className="mr-1" />Guardando…</>:<><Ico e="📅" className="mr-1" />{ACCESS_V2?"Guardar cita y abrir Google Calendar":"Guardar en Google Calendar"}</>}</button>
         <button type="button" onClick={onClose} className="px-4 py-2.5 rounded-lg text-sm font-semibold text-slate-500 hover:bg-[#f4f6f9]">Cancelar</button>
       </div>
     </form>
@@ -3696,7 +3704,9 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
 
 // ─── STATS ────────────────────────────────────────────────────
 // ─── CITA CARD (expandible: resultado, editar, borrar) ────────
-function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada }) {
+// v2 (opcional, solo ACCESS_V2): { autor, puedeResultado, puedeBorrar, onReprogramarVisita }
+function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada, v2=null }) {
+  const [reprogVisita,setReprogVisita]=useState(false);
   const [open,setOpen]=useState(false);
   const [mode,setMode]=useState("");          // "" | "result" | "edit"
   const [detail,setDetail]=useState("");
@@ -3713,13 +3723,24 @@ function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada }) {
   const fechaStr = fechaObj ? fechaObj.toLocaleDateString("es-MX",{weekday:"short",day:"numeric",month:"short"}) : "";
 
   const startEdit = () => {
-    setDraft({ nombre:a.nombre||"", telefono:a.telefono||"", direccion:a.direccion||"", fecha:(a.fecha||"").slice(0,16), notas:a.notas||"" });
+    setDraft(v2
+      ? { nombre:a.nombre||"", telefono:a.telefono||"", direccion:a.direccion||"", ciudad:a.ciudad||"", cp:a.cp||"", fecha:fechaLocalV2(a.fecha), notas:a.notas||"" }
+      : { nombre:a.nombre||"", telefono:a.telefono||"", direccion:a.direccion||"", fecha:(a.fecha||"").slice(0,16), notas:a.notas||"" });
     setMode("edit");
   };
-  const saveEdit = () => { onUpdate({ ...a, ...draft }); setMode(""); };
+  const saveEdit = () => {
+    // v2: cambiar la fecha al editar = reprogramar ANTES de la visita (queda en el historial).
+    if(v2 && draft.fecha && draft.fecha!==fechaLocalV2(a.fecha)){ const {fecha, ...resto}=draft; onUpdate(reprogramarAntesDeVisita({ ...a, ...resto }, fecha, v2.autor)); }
+    else onUpdate({ ...a, ...draft });
+    setMode("");
+  };
   const setRes = (id) => {
     if(id==="reset"){ setDetail(""); setMontoCita(""); setProductoCita(""); setFiltroCita(""); setVentaStep(false); startEdit(); return; }
-    if(id==="demo_venta"){
+    if(v2){
+      // v2: resultado de VISITA con trazabilidad (quién la registró y cuándo). Solo staff llega aquí.
+      const prod = id==="demo_venta" ? resolveProducto(productoCita, filtroCita) : null;
+      onUpdate(registrarResultadoV2(a, id, { detalle:detail||a.resultado_detalle||"", ...(prod?{ monto:montoCita, producto:prod.label, cartucho_meses:prod.meses }:{}) }, v2.autor));
+    } else if(id==="demo_venta"){
       const prod = resolveProducto(productoCita, filtroCita);
       onUpdate({ ...a, resultado:id, resultado_detalle:detail||a.resultado_detalle||"", monto:Number(montoCita)||0, producto:prod.label, cartucho_meses:prod.meses });
     } else {
@@ -3757,7 +3778,8 @@ function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada }) {
             ) : (
               <>
                 {resInfo && <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md" style={resInfo.style}>{resInfo.label}</span>}
-                {esPasada && !a.resultado && <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-700"><Ico e="⏰" className="mr-1.5" />Sin resultado</span>}
+                {v2 && a.status==="cancelada" && <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-red-100 text-red-700">Cancelada</span>}
+                {esPasada && !a.resultado && !(v2 && a.status==="cancelada") && <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-700"><Ico e="⏰" className="mr-1.5" />Sin resultado</span>}
               </>
             )}
           </div>
@@ -3774,20 +3796,26 @@ function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada }) {
               {/* Servicio: botones de resultado directos (Se realizó / No se realizó) */}
               {esServicio ? (
                 <>
-                  <div className="grid grid-cols-2 gap-2 mb-2">
+                  {(!v2 || v2.puedeResultado) && <div className="grid grid-cols-2 gap-2 mb-2">
                     <button onClick={()=>setServRes("realizado")}
                       className={`px-3 py-2.5 rounded-lg text-xs font-bold transition ${servEstado==="realizado"?"text-white ring-2 ring-offset-1 ring-emerald-500":"text-emerald-700 bg-emerald-50"}`}
                       style={servEstado==="realizado"?{background:"#16a34a"}:{}}><Ico e="✅" className="mr-1.5" />Se realizó</button>
                     <button onClick={()=>setServRes("no_realizado")}
                       className={`px-3 py-2.5 rounded-lg text-xs font-bold transition ${servEstado==="no_realizado"?"text-white ring-2 ring-offset-1 ring-red-500":"text-red-700 bg-red-50"}`}
                       style={servEstado==="no_realizado"?{background:"#dc2626"}:{}}><Ico e="❌" className="mr-1.5" />No se realizó</button>
-                  </div>
+                  </div>}
                   <div className="flex gap-1.5 flex-wrap">
                     <button onClick={startEdit} className="flex-1 text-xs font-bold py-2 px-3 rounded-lg bg-[#f4f6f9] text-slate-600"><Ico e="✏" className="mr-1.5" />Editar</button>
-                    <button onClick={()=>{if(confirm("¿Borrar este servicio? No se puede deshacer."))onDelete(a.id);}} className="text-xs font-bold py-2 px-3 rounded-lg bg-red-50 text-red-500"><Ico e="🗑" className="mr-1.5" />Borrar</button>
+                    {(!v2 || v2.puedeBorrar) && <button onClick={()=>{if(confirm("¿Borrar este servicio? No se puede deshacer."))onDelete(a.id);}} className="text-xs font-bold py-2 px-3 rounded-lg bg-red-50 text-red-500"><Ico e="🗑" className="mr-1.5" />Borrar</button>}
                   </div>
                   <div className="text-[10px] text-slate-400 mt-2"><Ico e="🔄" className="mr-1.5" />El resultado se sincroniza con la pestaña Servicio.</div>
                 </>
+              ) : v2 ? (
+                <CitaAccionesV2 a={a} puedeResultado={v2.puedeResultado} puedeBorrar={v2.puedeBorrar}
+                  onRegistrarResultado={()=>setMode("result")} onEditar={startEdit}
+                  onReprogramar={(f)=>onUpdate(reprogramarAntesDeVisita(a, f, v2.autor))}
+                  onCancelar={(motivo)=>onUpdate(cancelarCitaV2(a, v2.autor, new Date(), motivo))}
+                  onBorrar={onDelete} />
               ) : (
                 <div className="flex gap-1.5 flex-wrap">
                   <button onClick={()=>setMode("result")} className="flex-1 text-xs font-bold py-2 px-2 rounded-lg" style={{background:"#f1ecfd",color:RP.navy}}><Ico e="🎯" className="mr-1.5" />Resultado</button>
@@ -3808,11 +3836,14 @@ function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada }) {
                 <textarea className="w-full border-2 border-[#e5def4] bg-white rounded-lg px-3 py-2 text-sm text-[#1f2d3d] focus:outline-none focus:border-[#5b21b6] resize-none placeholder:text-slate-400 mb-2"
                   rows={2} maxLength={300} placeholder="Detalle del resultado (opcional)…"
                   value={detail} onChange={e=>setDetail(e.target.value)} />
-                {!ventaStep ? (
+                {v2 && reprogVisita ? (
+                  <ReprogramarEnVisitaV2 onVolver={()=>setReprogVisita(false)}
+                    onConfirmar={(f)=>{ v2.onReprogramarVisita(a, f, detail); setReprogVisita(false); setMode(""); setDetail(""); }} />
+                ) : !ventaStep ? (
                   <>
                     <div className="grid grid-cols-2 gap-2">
-                      {APPT_RESULTS.map(r=>(
-                        <button key={r.id} onClick={()=>{ if(r.id==="demo_venta"){ setVentaStep(true); } else { setRes(r.id); } }}
+                      {(v2 ? RESULTADOS_V2_BOTONES : APPT_RESULTS).map(r=>(
+                        <button key={r.id} onClick={()=>{ if(r.id==="demo_venta"){ setVentaStep(true); } else if(v2 && r.id==="reprogramada_visita"){ setReprogVisita(true); } else { setRes(r.id); } }}
                           style={{background:r.bg,color:r.text}}
                           className="flex items-center justify-center text-center px-3 py-3 rounded-lg text-sm font-bold shadow-sm hover:brightness-105 active:scale-95 transition">
                           {r.label}
@@ -3870,6 +3901,10 @@ function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada }) {
                 <input type="datetime-local" className={inpLight} value={draft.fecha} onChange={e=>setDraft(d=>({...d,fecha:e.target.value}))} />
               </div>
               <input className={inpLight} placeholder="Dirección" value={draft.direccion} onChange={e=>setDraft(d=>({...d,direccion:e.target.value}))} />
+              {v2 && <div className="grid grid-cols-2 gap-2">
+                <input className={inpLight} placeholder="Ciudad" value={draft.ciudad} onChange={e=>setDraft(d=>({...d,ciudad:e.target.value}))} />
+                <input className={inpLight} placeholder="ZIP" value={draft.cp} onChange={e=>setDraft(d=>({...d,cp:e.target.value}))} />
+              </div>}
               <textarea className={inpLight+" resize-none"} rows={2} placeholder="Notas" value={draft.notas} onChange={e=>setDraft(d=>({...d,notas:e.target.value}))} />
               <div className="flex gap-2">
                 <button onClick={saveEdit} className="flex-1 px-3 py-2 rounded-lg text-sm font-bold text-white" style={{background:RP.navy}}><Ico e="💾" className="mr-1.5" />Guardar</button>
@@ -4619,7 +4654,7 @@ const MESES_CAL = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Ago
 const DIAS_CAL  = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
 
 // ─── CALENDARIO ESTILO GOOGLE CALENDAR (día / semana / mes / año) ───
-function CalendarioAgenda({ appts, onUpdate, onDelete }) {
+function CalendarioAgenda({ appts, onUpdate, onDelete, v2=null }) {
   const isoLocal = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
   const hoyISO = isoLocal(new Date());
   const [modo,setModo] = useState("mes");            // dia | semana | mes | año
@@ -4669,7 +4704,7 @@ function CalendarioAgenda({ appts, onUpdate, onDelete }) {
     const esPasada=a.fecha && a.fecha<new Date().toISOString() && !(a.fecha||"").startsWith(hoyISO);
     return (
       <div key={a.id} className={`bg-white border-2 border-[#e8edf3] border-l-4 rounded-2xl shadow-sm ${TIPO_BORDER[a._type||a.tipo]||"border-l-slate-300"}`}>
-        <CitaCard a={a} mostrarFecha={mostrarFecha} esPasada={esPasada} onUpdate={onUpdate} onDelete={onDelete} />
+        <CitaCard a={a} mostrarFecha={mostrarFecha} esPasada={v2?isPastAppt(a)&&a.status!=="cancelada":esPasada} onUpdate={onUpdate} onDelete={onDelete} v2={v2} />
       </div>
     );
   });
@@ -4797,10 +4832,37 @@ function CalendarioAgenda({ appts, onUpdate, onDelete }) {
 
 // init (solo v2): {filtro, filtroTipo, filtroResultado, abrirTipo, abrirMenu} — llega desde el Centro de mando.
 // tiposPermitidos (solo v2): tipos de agenda que el rol puede crear. Sin estas props: igual que siempre.
-function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitidos=null }) {
+function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitidos=null, v2User=null, allData=null }) {
   const [showForm,setShowForm]=useState(!!init?.abrirTipo);const [menuOpen,setMenuOpen]=useState(!!init?.abrirMenu);
   const [preType,setPreType]=useState(init?.abrirTipo||null);const [calLoading,setCalLoading]=useState(false);const [calMsg,setCalMsg]=useState("");
+  // ── v2 (ACCESS_V2): lógica en services/agendaV2.ts ──
+  const V2=ACCESS_V2 && !!v2User;
+  const autorV2=V2?{uid:v2User.uid, nombre:v2User.nombre}:null;
+  const [clienteV2,setClienteV2]=useState(null);      // cliente elegido de MI cartera (o "manual")
+  const [dupV2,setDupV2]=useState(null);              // {appt, existente} → aviso de duplicado
+  const [guardadaV2,setGuardadaV2]=useState(null);    // última cita guardada → Google / Apple Calendar
+  const cfgV2=V2?{ autor:autorV2, puedeResultado:canRecordVisitResult(v2User.role), puedeBorrar:canHardDelete(v2User.role),
+    onReprogramarVisita:(a,fecha,nota)=>{
+      const { original, nueva }=reprogramarDesdeVisita(a, fecha, nota, autorV2, new Date(), genId());
+      setAppts(p=>[{...nueva,_type:"cita"}, ...p.map(x=>x.id===a.id?original:x)]);
+      setCalMsg(`Visita reprogramada: se creó la nueva cita de "${a.nombre}" para ${fecha.replace("T"," ")}.`);
+      setGuardadaV2(nueva);
+    } }:null;
+  const guardarV2=(appt, forzar=false)=>{
+    const c=clienteV2 && clienteV2!=="manual" ? clienteV2 : null;
+    const nueva={...appt, id:genId(), _type:appt.tipo, ...(c?{ sourceSection:c.section, sourceRecordId:c.recId, ...(c.refIdx!==undefined?{sourceRefIndex:c.refIdx}:{}) }:{})};
+    const existente=!forzar && duplicateApptCandidate(appts, nueva);
+    if(existente){ setDupV2({appt, existente}); return; }
+    setDupV2(null);
+    window.open(gcalLink({...nueva, createdByName:autorV2.nombre}),"_blank");
+    setAppts(p=>[nueva,...p]);
+    const cfg=TYPE_OPTIONS.find(t=>t.v===appt.tipo)||TYPE_OPTIONS[0];
+    setCalMsg(`${cfg.l} "${appt.nombre}" guardada. Se abrió Google Calendar con todo listo: solo toca GUARDAR allí.`);
+    setGuardadaV2({...nueva, createdByName:autorV2.nombre});
+    setShowForm(false);setPreType(null);setClienteV2(null);
+  };
   const handleSchedule=appt=>{
+    if(V2) return guardarV2(appt);
     setCalMsg("");
     window.open(gcalLink(appt),"_blank");
     setAppts(p=>[{...appt,id:Date.now(),_type:appt.tipo},...p]);
@@ -4808,7 +4870,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
     setCalMsg(`✅ ${cfg.l} — "${appt.nombre}" guardada aquí. Se abrió Google Calendar con todo listo: solo toca GUARDAR allá.`);
     setShowForm(false);setPreType(null);
   };
-  const openWith=(tipo)=>{setPreType(tipo);setMenuOpen(false);setShowForm(true);};
+  const openWith=(tipo)=>{setPreType(tipo);setMenuOpen(false);setShowForm(true);setClienteV2(null);setGuardadaV2(null);};
   const [vista,setVista]=useState("lista"); // lista | calendario
   const [filtro,setFiltro]=useState(init?.filtro||"hoy");   // hoy | proximas | todas
   const [filtroTipo,setFiltroTipo]=useState(init?.filtroTipo||"todos");
@@ -4852,7 +4914,8 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
   }
   // Filtrar por categoría (solo para la vista de lista)
   let lista=base;
-  if(filtro==="hoy")      lista=base.filter(a=>a.fecha?.startsWith(todayStr));
+  if(V2) lista=base.filter(a=>enFiltro(a, filtro));
+  else if(filtro==="hoy")      lista=base.filter(a=>a.fecha?.startsWith(todayStr));
   else if(filtro==="proximas") lista=base.filter(a=>a.fecha&&a.fecha>ahora&&!a.fecha.startsWith(todayStr));
   // "todas" deja todo
 
@@ -4861,7 +4924,13 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
   const nProximas=ordenadas.filter(a=>a.fecha&&a.fecha>ahora&&!a.fecha.startsWith(todayStr)).length;
   const sinResultado=ordenadas.filter(a=>{const t=a.tipo||a._type; return t==="cita" && a.fecha && a.fecha<ahora && !a.fecha.startsWith(todayStr) && !a.resultado;}).length;
 
-  const FILTROS=[
+  const cV2=V2?agendaCounters(ordenadas):null;
+  const FILTROS=V2?[
+    {id:"hoy",          label:"Hoy",           count:cV2.hoy},
+    {id:"proximas",     label:"Próximas",      count:cV2.proximas},
+    {id:"sinResultado", label:"Sin resultado", count:cV2.sinResultado},
+    {id:"todas",        label:"Todas",         count:cV2.todas},
+  ]:[
     {id:"hoy",      label:"Hoy",      count:nHoy},
     {id:"proximas", label:"Próximas", count:nProximas},
     {id:"todas",    label:"Todas",    count:ordenadas.length},
@@ -4880,6 +4949,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
     {v:"todos",         label:"Todos"},
     {v:"demo_venta",    ico:"💰", label:"Demo venta"},
     {v:"demo_no_venta", ico:"📋", label:"Demo no venta"},
+    ...(V2?[{v:"reprogramada_visita", ico:"🔁", label:"Reprogramada en visita"}]:[]),
     {v:"no_recibio",    ico:"🚫", label:"No recibió"},
     {v:"no_visito",     ico:"🏠", label:"No se visitó"},
     {v:"seguimiento",   ico:"📅", label:"Seguimiento"},
@@ -4895,6 +4965,10 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
     <div>
       <AvisoPeriodo init={init} tab="agenda" queMuestra="se listan todas las citas de ese tipo, sin límite de fechas" />
       {calMsg && <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-700 font-bold flex items-center justify-between"><Msg>{calMsg}</Msg><button onClick={()=>setCalMsg("")} className="ml-2"><Ico e="✕" /></button></div>}
+      {V2 && guardadaV2 && <div className="-mt-2 mb-4 px-3 pb-3 rounded-b-xl bg-emerald-50 border border-t-0 border-emerald-200 text-xs text-emerald-800">
+        <div className="font-bold pt-2">Agregar a tu calendario:</div>
+        <CalendariosV2 appt={guardadaV2} titulo={(EVENT_CONFIG[guardadaV2.tipo]||EVENT_CONFIG.cita).title(guardadaV2.nombre)} gcal={gcalLink(guardadaV2)} />
+      </div>}
 
       {/* ── DROPDOWN TRIGGER ── */}
       <div className="relative mb-4">
@@ -4923,10 +4997,10 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
       </div>
 
       {/* Aviso de citas pasadas sin resultado */}
-      {sinResultado>0 && (
-        <button onClick={()=>{setFiltro("todas");setFiltroTipo("todos");setFiltroResultado("todos");}}
+      {(V2?cV2.sinResultado:sinResultado)>0 && (
+        <button onClick={()=>{setFiltro(V2?"sinResultado":"todas");setFiltroTipo("todos");setFiltroResultado("todos");}}
           className="w-full mb-4 p-3 rounded-xl bg-amber-50 border border-amber-300 text-sm text-amber-800 font-bold flex items-center justify-between hover:bg-amber-100 transition">
-          <span><Ico e="⏰" className="mr-1.5" />{sinResultado} cita(s) pasada(s) sin resultado</span>
+          <span><Ico e="⏰" className="mr-1.5" />{V2?cV2.sinResultado:sinResultado} cita(s) pasada(s) sin resultado</span>
           <span className="text-xs">Ver →</span>
         </button>
       )}
@@ -4992,7 +5066,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
 
       {/* Calendario (día / semana / mes / año) */}
       {vista==="calendario" && (
-        <CalendarioAgenda appts={base}
+        <CalendarioAgenda appts={base} v2={cfgV2}
           onUpdate={u=>{setAppts(p=>p.map(x=>x.id===u.id?u:x)); if(u.resultado==="demo_venta" && !u._sincronizado && onVentaSync) onVentaSync(u);}}
           onDelete={id=>setAppts(p=>p.filter(x=>x.id!==id))} />
       )}
@@ -5000,13 +5074,13 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
       {/* Lista de citas */}
       {vista==="lista" && (lista.length===0
         ? <div className="bg-white rounded-2xl p-8 text-center text-sm text-slate-400 shadow-sm border border-[#e8edf3]">
-            {busca||filtrosActivos>0?"No hay citas que coincidan con los filtros":filtro==="hoy"?"No hay citas para hoy":filtro==="proximas"?"No hay citas próximas":"No hay citas agendadas"}
+            {busca||filtrosActivos>0?"No hay citas que coincidan con los filtros":filtro==="sinResultado"?"No hay visitas pasadas pendientes de resultado":filtro==="hoy"?"No hay citas para hoy":filtro==="proximas"?"No hay citas próximas":"No hay citas agendadas"}
           </div>
         : <div className="space-y-2">{lista.map(a=>{
-            const esPasada=a.fecha&&a.fecha<ahora&&!a.fecha.startsWith(todayStr);
+            const esPasada=V2 ? isPastAppt(a) && a.status!=="cancelada" : a.fecha&&a.fecha<ahora&&!a.fecha.startsWith(todayStr);
             return (
               <div key={a.id} className={`bg-white border-2 border-[#e8edf3] border-l-4 rounded-2xl shadow-sm ${TIPO_BORDER[a._type]||"border-l-slate-300"} ${esPasada&&!a.resultado?"ring-1 ring-amber-200":""}`}>
-                <CitaCard a={a} mostrarFecha={filtro!=="hoy"} esPasada={esPasada}
+                <CitaCard a={a} mostrarFecha={filtro!=="hoy"} esPasada={esPasada} v2={cfgV2}
                   onUpdate={u=>{setAppts(p=>p.map(x=>x.id===u.id?u:x)); if(u.resultado==="demo_venta" && !u._sincronizado && onVentaSync) onVentaSync(u);}}
                   onDelete={id=>setAppts(p=>p.filter(x=>x.id!==id))} />
               </div>
@@ -5014,7 +5088,11 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
           })}</div>)}
 
       {showForm && <Modal title={`${TIPO_ICON[preType]||"📅"} ${TYPE_OPTIONS.find(t=>t.v===preType)?.l||"Nueva cita"}`} onClose={()=>{setShowForm(false);setPreType(null);}}>
-        <AppointmentForm forceTipo={preType} loading={calLoading} onSave={handleSchedule} onClose={()=>{setShowForm(false);setPreType(null);}} agenteActivo={agente} />
+        {V2 && dupV2 && <AvisoDuplicadoV2 existente={dupV2.existente} onVolver={()=>setDupV2(null)} onGuardar={()=>guardarV2(dupV2.appt, true)} />}
+        {(()=>{ const form = V2 && preType==="cita" && !clienteV2 ? <ClientePickerV2 allData={allData} onElegir={c=>setClienteV2(c)} onManual={()=>setClienteV2("manual")} onCerrar={()=>{setShowForm(false);setPreType(null);}} />
+        : <AppointmentForm key={V2&&clienteV2&&clienteV2!=="manual"?clienteV2.key:"nueva"} client={V2&&clienteV2&&clienteV2!=="manual"?clienteV2:undefined} forceTipo={preType} loading={calLoading} onSave={handleSchedule} onClose={()=>{setShowForm(false);setPreType(null);setClienteV2(null);}} agenteActivo={V2?v2User.nombre:agente} />;
+          // v2: el formulario sigue montado (oculto) durante el aviso de duplicado → "Volver" conserva lo escrito.
+          return V2 ? <div style={dupV2 ? {display:"none"} : undefined}>{form}</div> : form; })()}
       </Modal>}
     </div>
   );
@@ -5763,13 +5841,15 @@ function RecruitCard({ r, onUpdate, onEdit, onDelete, onAgendar }) {
 }
 
 function EntrevistaModal({ prospecto, agente, onSave, onClose }) {
-  const defFecha = new Date(Date.now()+3600000).toISOString().slice(0,16);
+  // v2: hora LOCAL (toISOString es UTC: en Texas, de noche caía en el día siguiente).
+  const defFecha = ACCESS_V2 ? localDateTimeValue(new Date(Date.now()+3600000)) : new Date(Date.now()+3600000).toISOString().slice(0,16);
   const [f,setF]=useState({
     nombre: prospecto?.nombre||"",
     telefono: prospecto?.telefono||"",
     fecha: defFecha,
     notas: "",
-    attendees: TEAM_CONTACTS.filter(c=>c.default.entrevista).map(c=>c.email),
+    // v2: ningún workspace hereda correos fijos (TEAM_CONTACTS es de la app legacy).
+    attendees: ACCESS_V2 ? [] : TEAM_CONTACTS.filter(c=>c.default.entrevista).map(c=>c.email),
     extraEmail: "",
   });
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
@@ -5787,9 +5867,9 @@ function EntrevistaModal({ prospecto, agente, onSave, onClose }) {
         <Field label="Teléfono"><input className={inpLight} value={f.telefono} onChange={e=>set("telefono",e.target.value)} placeholder="Teléfono" /></Field>
         <Field label="Fecha y hora"><input type="datetime-local" className={inpLight} value={f.fecha} onChange={e=>set("fecha",e.target.value)} /></Field>
         <Field label="Nota"><textarea className={inpLight+" resize-none"} rows={2} value={f.notas} onChange={e=>set("notas",e.target.value)} placeholder="Ej: Entrevista inicial, llevar presentación…" /></Field>
-        <Field label="Invitar al equipo (Google Calendar)">
+        <Field label={ACCESS_V2 ? "Invitar por correo (Google Calendar)" : "Invitar al equipo (Google Calendar)"}>
           <div className="space-y-1.5">
-            {TEAM_CONTACTS.map(c=>(
+            {(ACCESS_V2 ? [] : TEAM_CONTACTS).map(c=>(
               <button key={c.email} type="button" onClick={()=>toggle(c.email)} className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold border-2 text-left ${f.attendees.includes(c.email)?"border-teal-500 bg-teal-50 text-teal-700":"border-[#e5def4] text-slate-500"}`}>
                 <span>{f.attendees.includes(c.email)?"✅":"⬜"}</span>{c.label}
               </button>
@@ -8552,7 +8632,11 @@ function AppRoot() {
   // createdByUid/createdByName (src/services/apptTrace.ts). Producción: igual que siempre.
   const setAppts=fn=>setState(s=>{
     const next=typeof fn==="function"?fn(s.appts||[]):fn;
-    return {...s,appts: ACCESS_V2 && v2User ? enrichNewAppts(s.appts||[], next, {uid:v2User.uid, nombre:v2User.nombre}) : next};
+    if(!(ACCESS_V2 && v2User)) return {...s,appts:next};
+    const autor={uid:v2User.uid, nombre:v2User.nombre};
+    // v2: nuevas → createdBy*; resultado de staff → resultBy*; el telemarketing no cambia
+    // resultados de visita ni la autoría/origen (src/services/agendaV2.ts · trazarCambiosAppts).
+    return {...s,appts: trazarCambiosAppts(s.appts||[], enrichNewAppts(s.appts||[], next, autor), autor, v2User.role)};
   });
   // ── SINCRONIZACIÓN Agenda → bases de datos ──
   // Cuando una cita de la Agenda se marca como VENTA, la atribuimos a una base:
@@ -8567,14 +8651,31 @@ function AppRoot() {
       const monto=Number(appt.monto)||0;
       const histEntry=makeHistorialEntry({ tipo:"cita", cita_resultado:"demo_venta", notas:`💰 Venta agendada en Agenda${appt.producto?` — ${appt.producto}`:""}`, agente:appt.agente||"", monto, producto:appt.producto||"", cartucho_meses:appt.cartucho_meses||0 });
       let grupo=null, encontradoId=null;
-      for(const g of ["agregados","prospectos","distribucion"]){
-        const arr=s[g]||[];
-        const m=tel?arr.find(c=>soloNum(c.telefono||"")===tel):null;
-        if(m){ grupo=g; encontradoId=m.id; break; }
-      }
       const patch={};
+      if(ACCESS_V2){
+        // v2: sourceSection + sourceRecordId (+ sourceRefIndex) mandan; teléfono solo sin trazabilidad.
+        const src=sourceRecordForAppt(s, appt);
+        if(src && src.section==="referidos"){
+          const upd=(r)=>({...r, venta:true, resultado:"demo_venta", ultimo_monto_venta:monto||r.ultimo_monto_venta, ultimo_producto:appt.producto||r.ultimo_producto, historial:[...(Array.isArray(r.historial)?r.historial:[]), histEntry]});
+          patch.referidos=(s.referidos||[]).map(anf=>{
+            if(String(anf.id)!==src.id) return anf;
+            if(Array.isArray(anf.referidos)) return {...anf, referidos:anf.referidos.map((r,i)=>i===src.refIdx?upd(r):r)};
+            const k=Object.keys(anf.referidos||{})[src.refIdx]; return k===undefined?anf:{...anf, referidos:{...anf.referidos,[k]:upd(anf.referidos[k])}};
+          });
+          patch.appts=(s.appts||[]).map(a=>a.id===appt.id?{...a, _sincronizado:true, _clienteId:src.id, _clienteGrupo:"referidos"}:a);
+          return {...s, ...patch};
+        }
+        if(src){ grupo=src.section; encontradoId=src.id; }
+        else if(appt.sourceRecordId){ patch.appts=(s.appts||[]).map(a=>a.id===appt.id?{...a, _sincronizado:true}:a); return {...s, ...patch}; } // origen ya no visible: no inventar cliente
+      } else {
+        for(const g of ["agregados","prospectos","distribucion"]){
+          const arr=s[g]||[];
+          const m=tel?arr.find(c=>soloNum(c.telefono||"")===tel):null;
+          if(m){ grupo=g; encontradoId=m.id; break; }
+        }
+      }
       if(grupo && encontradoId){
-        patch[grupo]=(s[grupo]||[]).map(c=>c.id===encontradoId?{...c, venta:true, resultado:"demo_venta", ultimo_monto_venta:monto||c.ultimo_monto_venta, ultimo_producto:appt.producto||c.ultimo_producto, ultimo_cartucho_meses:appt.cartucho_meses||c.ultimo_cartucho_meses, historial:[...lst(c.historial), histEntry]}:c);
+        patch[grupo]=(s[grupo]||[]).map(c=>String(c.id)===String(encontradoId)?{...c, venta:true, resultado:"demo_venta", ultimo_monto_venta:monto||c.ultimo_monto_venta, ultimo_producto:appt.producto||c.ultimo_producto, ultimo_cartucho_meses:appt.cartucho_meses||c.ultimo_cartucho_meses, historial:[...lst(c.historial), histEntry]}:c);
       } else {
         const nuevo={ id:genId(), nombre:appt.nombre||"(Cliente de agenda)", telefono:appt.telefono||"", fuente:"Agenda", producto:appt.producto||"", ciudad:appt.ciudad||"", cp:"", direccion:appt.direccion||"", observaciones:"Venta agendada directo en Agenda", detalles:"", estado:"verde", venta:true, resultado:"demo_venta", ultimo_monto_venta:monto, ultimo_producto:appt.producto||"", ultimo_cartucho_meses:appt.cartucho_meses||0, ultimaNota:"", notas:[], historial:[histEntry], proximo_seguimiento:"", creado:new Date().toISOString(), actualizado:"", _origenAgenda:true };
         grupo="prospectos"; encontradoId=nuevo.id;
@@ -8953,7 +9054,7 @@ function AppRoot() {
             {tab==="inicio" && ACCESS_V2 && v2User && <CommandCenterV2 user={v2User} state={state} appts={state.appts||[]} callLog={state.callLog||{}} contarVentasDemos={contarVentasDemos} canTab={canTab}
               irA={(t,intent)=>{ setNavIntent(intent?{...intent,tab:t,key:Date.now()}:null); goTo(t); }} />}
             {tab==="inicio" && !(ACCESS_V2 && v2User) && <Dashboard allData={allData} appts={state.appts||[]} setAppts={setAppts} callLog={state.callLog} agente={agenteActivo} goTo={goTo} incentivos={state.incentivos||[]} cofreConfig={state.cofreConfig} cofreAperturas={state.cofreAperturas||[]} abrirCofre={abrirCofre} rolActivo={rolUsuario} respaldos={state.respaldos||[]} registrarRespaldo={registrarRespaldo} cumpleanos={state.cumpleanos||[]} />}
-            {tab==="agenda" && <Agenda key={ACCESS_V2?(navIntent?.key||"agenda"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} onVentaSync={sincronizarVentaAgenda}
+            {tab==="agenda" && <Agenda key={ACCESS_V2?(navIntent?.key||"agenda"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} onVentaSync={sincronizarVentaAgenda} {...(ACCESS_V2&&v2User?{v2User, allData:state}:{})}
               init={ACCESS_V2 && navIntent?.tab==="agenda" ? navIntent : null}
               tiposPermitidos={ACCESS_V2 && v2User ? TIPOS_AGENDA_POR_ROL[v2User.role] : null} />}
             {tab==="llamadas" && ACCESS_V2 && v2User && especialidadDe(v2User.role) && <CallCenterV2 user={v2User} esp={especialidadDe(v2User.role)} state={state}
