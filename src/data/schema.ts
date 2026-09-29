@@ -18,7 +18,7 @@ export const LEGACY_SOURCE = "crm_telemarketing";
 // Qué tipo de asignación corresponde a cada sección.
 export const SECTION_ASSIGNMENT: Record<Section, AssignmentType> = {
   agregados: "ventas", referidos: "ventas", prospectos: "ventas",
-  distribucion: "cobranza", cobranza: "cobranza", reclutamiento: "reclutamiento",
+  distribucion: "ventas", cobranza: "cobranza", reclutamiento: "reclutamiento",   // Distribución ES ventas
 };
 
 export type RecordDoc = {
@@ -81,8 +81,8 @@ export const CALLLOG_KEY = "callLog";
 // sección que su especialidad trabaja, siempre con assignedTo == su uid.
 // (Así las Rules pueden verificar la consulta completa; ver firestore.rules.)
 export const SECTIONS_FOR_ROLE: Record<string, Section[]> = {
-  telemarketing_ventas: ["agregados", "referidos", "prospectos"],
-  telemarketing_cobranza: ["cobranza", "distribucion"],
+  telemarketing_ventas: ["agregados", "referidos", "prospectos", "distribucion"],
+  telemarketing_cobranza: ["cobranza"],
   telemarketing_reclutamiento: ["reclutamiento"],
 };
 export type QuerySpec = { collection: "records" | "appts"; where: Array<[string, string, any]> };
@@ -101,4 +101,34 @@ export function queriesFor(user: { role?: string; uid?: string } | null, col: "r
     collection: "records" as const,
     where: [["assignedTo", "==", user.uid], ["section", "==", sec]] as Array<[string, string, any]>,
   }));
+}
+
+// ── Cobranza autosuficiente para llamar ─────────────────────────────────────
+// Distribución (VENTAS) y Cobranza son especialidades distintas: la TLK de
+// Cobranza NO recibe Distribución. Por eso cada cuenta de Cobranza enlazada
+// (linkedRecordId) lleva COPIA de los datos mínimos de contacto del cliente.
+// • Solo identidad/contacto: nada de ventas, notas ni historial comercial.
+// • Nunca sobrescribe un dato que Cobranza ya tenga (cualquiera de sus variantes).
+// • Se escribe con los nombres que lee la pantalla de Cobranza (nombre, tel,
+//   nroCuenta, direccion, ciudad) y los de la bandeja (telefono, cuenta), + cp.
+// linkedRecordId se conserva: es identidad del cliente, NO responsable ni cola.
+const vacio = (v: any) => v === undefined || v === null || String(v).trim() === "";
+export function completarContactoCobranza(cob: any, dist: any): { doc: any; campos: string[] } {
+  if (!cob || !dist) return { doc: cob, campos: [] };
+  const out: any = { ...cob }; const campos: string[] = [];
+  const poner = (claves: string[], valor: any) => {
+    if (vacio(valor) || claves.some((k) => !vacio(cob[k]))) return;
+    claves.forEach((k) => { out[k] = valor; }); campos.push(...claves);
+  };
+  poner(["nombre"], dist.nombre);
+  poner(["telefono", "tel"], dist.telefono || dist.telefonoMovil || dist.telefonoCasa);
+  // Número de cuenta: solo si Cobranza no tiene NINGUNA variante (cuenta, nroCuenta, numeroCuenta).
+  if (["cuenta", "nroCuenta", "numeroCuenta"].every((k) => vacio(cob[k])) && !vacio(dist.cuenta)) {
+    out.cuenta = dist.cuenta; out.nroCuenta = dist.cuenta; campos.push("cuenta", "nroCuenta");
+  }
+  poner(["direccion"], dist.direccion);
+  poner(["ciudad"], dist.ciudad);
+  poner(["cp"], dist.cp);
+  if (campos.length) out.contactoCopiadoDe = { section: "distribucion", id: String(dist.id ?? cob.linkedRecordId ?? ""), campos };
+  return { doc: campos.length ? out : cob, campos };
 }

@@ -10,7 +10,7 @@
 //    tal cual (texto, mapa o array), como se encontró en el dry-run.
 //  • Los campos del motor (asignación, origen) jamás los escribe la app normal:
 //    se toman SIEMPRE del documento actual. Solo el escritor de asignaciones los cambia.
-import { ENGINE_FIELDS, SECTION_ASSIGNMENT, Section, COBRANZA_SHARED_DOC, CALLLOG_KEY, isSharedKey, docIdFor } from "./schema";
+import { ENGINE_FIELDS, SECTION_ASSIGNMENT, Section, COBRANZA_SHARED_DOC, CALLLOG_KEY, isSharedKey, docIdFor, completarContactoCobranza } from "./schema";
 import { asList } from "../services/assignments";
 
 export const LIST_KEYS: Section[] = ["agregados", "referidos", "prospectos", "distribucion", "reclutamiento"];
@@ -96,6 +96,8 @@ export function apptDoc(a: any, cur: any, ctx: Ctx): any {
     if (cur.createdByUid !== undefined) out.createdByUid = cur.createdByUid;
     if (cur.createdByName !== undefined) out.createdByName = cur.createdByName;
     out.assignedTo = cur.assignedTo ?? null;
+    // El registro de origen tampoco cambia al editar (ni se inventa en citas viejas).
+    ["sourceRecordId", "sourceSection", "sourceRefIndex"].forEach((k) => { delete out[k]; if (cur[k] !== undefined) out[k] = cur[k]; });
   }
   out.eliminado = a.eliminado === true;
   return out;
@@ -136,10 +138,18 @@ export function freshEngine(section: Section, id: string, ctx: Ctx): any {
 }
 
 // Registro de la app → documento a guardar. Los campos del motor salen del doc actual.
-function toDoc(section: Section, appRec: any, current: any, ctx: Ctx, docId: string): any {
+function toDoc(section: Section, appRec: any, current: any, ctx: Ctx, docId: string, d0: Docs = emptyDocs()): any {
   const engine = current ? pickEngine(current) : freshEngine(section, docId, ctx);
-  const out = { ...clean(appRec), ...engine, id: docId, appId: ctx.appId, section };
-  if (section === "cobranza") out.legacyId = current?.legacyId ?? String(docId).replace(/^cob_/, "");
+  let out: any = { ...clean(appRec), ...engine, id: docId, appId: ctx.appId, section };
+  if (section === "cobranza") {
+    const clave = current?.legacyId ?? String(docId).replace(/^cob_/, "");
+    out.legacyId = clave;
+    // Cuenta nueva de un cliente que existe en Distribución: se enlaza por identidad
+    // (NO por responsable) y copia solo los datos de contacto que le falten.
+    const cliente = d0.records[clave];
+    if (!current && !out.linkedRecordId && cliente?.section === "distribucion") out.linkedRecordId = clave;
+    if (out.linkedRecordId && d0.records[out.linkedRecordId]?.section === "distribucion") out = completarContactoCobranza(out, d0.records[out.linkedRecordId]).doc;
+  }
   return out;
 }
 
@@ -172,7 +182,7 @@ export function diffState(prev: any, next: any, d: Docs, ctx: Ctx): DiffResult {
       Object.keys(ncd).forEach((key) => {
         if (pcd[key] === ncd[key] || (pcd[key] && same(pcd[key], ncd[key]))) return;
         const docId = docIdFor("cobranza", key);
-        ops.push({ kind: "set", col: "records", id: docId, data: toDoc("cobranza", { ...ncd[key], id: key }, d.records[docId], ctx, docId) });
+        ops.push({ kind: "set", col: "records", id: docId, data: toDoc("cobranza", { ...ncd[key], id: key }, d.records[docId], ctx, docId, d) });
       });
       Object.keys(pcd).forEach((key) => {
         if (key in ncd) return;
