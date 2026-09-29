@@ -169,8 +169,9 @@ test("Consultas por rol: el telemarketing nunca descarga la base completa", () =
     [["assignedTo", "==", "u1"], ["section", "==", "agregados"]],
     [["assignedTo", "==", "u1"], ["section", "==", "referidos"]],
     [["assignedTo", "==", "u1"], ["section", "==", "prospectos"]],
+    [["assignedTo", "==", "u1"], ["section", "==", "distribucion"]],
   ]);
-  assert.deepEqual(queriesFor({ role: "telemarketing_cobranza", uid: "c" }).map((q) => q.where[1][2]), ["cobranza", "distribucion"]);
+  assert.deepEqual(queriesFor({ role: "telemarketing_cobranza", uid: "c" }).map((q) => q.where[1][2]), ["cobranza"]);
   assert.deepEqual(queriesFor({ role: "telemarketing_reclutamiento", uid: "r" }).map((q) => q.where[1][2]), ["reclutamiento"]);
   assert.deepEqual(queriesFor({ role: "supervisor", uid: "s" }), [{ collection: "records", where: [] }]);
   assert.deepEqual(queriesFor({ role: "super_admin", uid: "t" }), [{ collection: "records", where: [] }]);

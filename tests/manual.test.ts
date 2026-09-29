@@ -27,7 +27,7 @@ test("Solo aparecen receptores cuyo rol trabaja esa sección", () => {
   assert.deepEqual(n("referidos"), ["Yelitza"]);
   assert.deepEqual(n("prospectos"), ["Yelitza"]);
   assert.deepEqual(n("cobranza"), ["Jovanna"]);
-  assert.deepEqual(n("distribucion"), ["Jovanna"]);
+  assert.deepEqual(n("distribucion"), ["Yelitza"]);          // Distribución ES ventas
   assert.deepEqual(n("reclutamiento"), ["Pedro"]);
 });
 

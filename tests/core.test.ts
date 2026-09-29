@@ -30,19 +30,20 @@ test("Distribuidor y Supervisor: toda su app, sin poder crear Súper Admin", () 
   assert.ok(!manageableRoles(U("distribuidor")).includes("distribuidor"));
   assert.deepEqual(manageableRoles(U("supervisor")), []);
 });
-test("Telemarketing Ventas: solo lo asignado; sin cobranza, reclutamiento ni usuarios", () => {
+test("Telemarketing Ventas: solo lo asignado (Distribución incluida); sin cobranza, reclutamiento ni usuarios", () => {
   const u = U("telemarketing_ventas");
   assert.equal(recordScope(u, "agregados"), "assigned");
   assert.equal(recordScope(u, "cobranza"), "none");
   assert.equal(recordScope(u, "reclutamiento"), "none");
-  assert.equal(recordScope(u, "distribucion"), "none");
+  assert.equal(recordScope(u, "distribucion"), "assigned");   // Distribución ES ventas
   ["cobranza", "reclutamiento", "usuarios", "asignaciones", "stats"].forEach((t) => assert.ok(!canViewTab(u, t), t));
   ["inicio", "llamadas", "agenda", "agregados"].forEach((t) => assert.ok(canViewTab(u, t), t));
 });
-test("Cobranza: solo cobranza + distribución asignada", () => {
+test("Cobranza: SOLO sus cuentas de cobranza (Distribución es Ventas)", () => {
   const u = U("telemarketing_cobranza");
   assert.equal(recordScope(u, "cobranza"), "assigned");
-  assert.equal(recordScope(u, "distribucion"), "assigned");
+  assert.equal(recordScope(u, "distribucion"), "none");
+  assert.ok(!canViewTab(u, "distribucion"));
   assert.equal(recordScope(u, "agregados"), "none");
   assert.equal(recordScope(u, "reclutamiento"), "none");
   assert.ok(canViewTab(u, "cobranza")); assert.ok(!canViewTab(u, "reclutamiento")); assert.ok(!canViewTab(u, "prospectos"));

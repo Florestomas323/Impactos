@@ -149,8 +149,8 @@ test("modo actual (producción): canDo/canTab responden IGUAL que el sistema vie
 test("modo nuevo: pestañas separadas para Ventas, Cobranza y Reclutamiento", () => {
   const V = (role: string) => ({ mode: "v2" as const, user: { uid: "u", role, status: "active", appId: "impactos" } });
   const ver = (role: string) => ["agregados", "prospectos", "referidos", "distribucion", "cobranza", "reclutamiento", "usuarios", "asignaciones"].filter((t) => canTab(t, V(role)));
-  assert.deepEqual(ver("telemarketing_ventas"), ["agregados", "prospectos", "referidos"]);
-  assert.deepEqual(ver("telemarketing_cobranza"), ["distribucion", "cobranza"]);
+  assert.deepEqual(ver("telemarketing_ventas"), ["agregados", "prospectos", "referidos", "distribucion"]);
+  assert.deepEqual(ver("telemarketing_cobranza"), ["cobranza"]);
   assert.deepEqual(ver("telemarketing_reclutamiento"), ["reclutamiento"]);
   assert.deepEqual(ver("supervisor"), ["agregados", "prospectos", "referidos", "distribucion", "asignaciones"]);
   assert.deepEqual(ver("distribuidor"), ["agregados", "prospectos", "referidos", "distribucion", "cobranza", "reclutamiento", "usuarios", "asignaciones"]);

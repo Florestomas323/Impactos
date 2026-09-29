@@ -39,7 +39,8 @@ const state = {
     { id: "a5", estado: "sin_estado", assignedTo: "otra", historial: [] },
   ],
   prospectos: [{ id: "p1", estado: "sin_estado", assignedTo: "ven", notas: "texto viejo" }],
-  distribucion: [{ id: "d1", assignedTo: "cob", historial: [{ tipo: "cita", fecha: `${HOY}T09:00:00`, cita_resultado: "demo_no_venta" }] }],
+  // Distribución ES ventas: su responsable es la TLK de Ventas ("ven"); sin campo estado (dato fresco).
+  distribucion: [{ id: "d1", assignedTo: "ven", historial: [{ tipo: "cita", fecha: `${HOY}T09:00:00`, cita_resultado: "demo_no_venta" }] }],
   referidos: [{ id: "r1", assignedTo: "ven", referidos: { x: { nombre: "Luis" } } }],
   reclutamiento: [
     { id: "rc1", assignedTo: "rec", resultado: "Pendiente", entrevista_agendada: `${HOY}T16:00` },
@@ -49,7 +50,8 @@ const state = {
     { id: "rc4", assignedTo: "otro", resultado: "Pendiente" },
   ],
   cobranza: { clientesData: {
-    d1: { assignedTo: "cob", historial: [{ tipo: "pago", fecha: `${HOY}T08:00:00` }], promesa: { fecha: HOY } },
+    // Misma persona, otra especialidad: su cuenta de Cobranza la lleva "cob" (enlazada solo por identidad).
+    d1: { assignedTo: "cob", linkedRecordId: "d1", nombre: "Dora", tel: "2145550001", historial: [{ tipo: "pago", fecha: `${HOY}T08:00:00` }], promesa: { fecha: HOY } },
     d2: { assignedTo: "cob", historial: [], promesa: { fecha: "2026-09-30" } },
     d3: { assignedTo: "otra" },
   } },
@@ -85,21 +87,22 @@ test("Embudo comercial Hoy / Semana / Mes reutiliza contarVentasDemos", () => {
 
 test("Telemarketing Ventas: SOLO assignedTo === su uid (nunca asignado_a)", () => {
   const r = ventasResumen(state, appts, { [HOY]: { Vendedora: 14 } }, { uid: "ven", nombre: "Vendedora", now: NOW });
-  assert.equal(r.miCartera, 5);                  // a1 a2 a3 p1 r1 — NO a4 (asignado_a viejo) ni a5
-  assert.equal(r.porLlamar, 3);                  // a1, a2 (naranja), p1
+  assert.equal(r.miCartera, 6);                  // a1 a2 a3 p1 r1 + d1 de Distribución — NO a4 (asignado_a viejo) ni a5
+  assert.equal(r.porLlamar, 5);                  // a1, a2 (naranja), p1, y r1/d1 sin campo estado (= sin_estado)
   assert.equal(r.seguimientos, 1);
   assert.equal(r.citasHoy, 1);                   // solo la suya (10)
   assert.equal(r.flujo.llamadasHoy, 14);
-  assert.equal(r.flujo.contactados, 2);          // a2 y a3 (historial como mapa)
+  assert.equal(r.flujo.contactados, 3);          // a2, a3 (historial como mapa) y d1
 });
 
 test("Telemarketing Cobranza: su cartera, pendientes, promesas y recordatorios", () => {
   const r = cobranzaResumen(state, appts, { uid: "cob", nombre: "Cob", now: NOW });
   assert.equal(r.miCartera, 2);
-  assert.equal(r.pendientes, 1);                 // d2: sin gestión hoy
-  assert.equal(r.seguimientosHoy, 2);            // promesa de d1 hoy + recordatorio 11
-  assert.equal(r.compromisos, 3);                // promesas d1, d2 + recordatorio 12
-  assert.equal(r.clientesDistribucion, 1);
+  assert.equal(r.pendientes, 2);                 // un PAGO de hoy en historial no es una llamada: d1 sigue pendiente
+  assert.equal(r.seguimientosHoy, 2);            // promesa de d1 hoy + recordatorio 11 (otro evento)
+  assert.equal(r.compromisos, 2);                // solo promesas reales (d1 hoy, d2 el 30); el recordatorio 12 NO
+  // No depende de Distribución: sin esa base, el resultado es el mismo
+  assert.deepEqual(cobranzaResumen({ ...state, distribucion: [] }, appts, { uid: "cob", nombre: "Cob", now: NOW }), r);
 });
 
 test("Telemarketing Reclutamiento: prospecto → contacto → entrevista → socio", () => {
@@ -206,4 +209,51 @@ test("Embudo Mes: Estadísticas ya muestra el mes actual (sin aviso); Agenda con
   assert.ok(!periodoSoportado("agenda", "mes"));
   ["fVisitas", "fDemos", "fVentas", "fVolumen"].forEach((k) => ["hoy", "semana", "mes"].forEach((p) =>
     assert.equal(destinoEmbudo(k, p as any, NOW).intent!.periodo, p, `${k}/${p}`)));
+});
+
+// ════════ r5: Centro de mando alineado con Llamadas v2 ════════
+const cuenta = (x: any = {}) => ({ assignedTo: "tlk1", nombre: "Cliente", tel: "2145550000", historial: [], ...x });
+const cob2 = (cd: any, extraAppts: any[] = []) => cobranzaResumen({ cobranza: { clientesData: cd } }, extraAppts, { uid: "tlk1", nombre: "T", now: NOW });
+
+test("Pendientes lee `gestiones`: gestión de hoy ya no está pendiente; sin gestión sí", () => {
+  const r = cob2({
+    cob1: cuenta({ gestiones: [{ tipo: "gestion", fecha: HOY, agenteUid: "tlk1" }] }),
+    cob2: cuenta(),
+  });
+  assert.equal(r.pendientes, 1);                                     // solo cob2
+  // un pago viejo o una promesa en historial NO cuentan como llamada de hoy
+  assert.equal(cob2({ c: cuenta({ historial: [{ tipo: "pago", fecha: HOY }, { tipo: "promesa", fecha: HOY }, { tipo: "promesa_rota", fecha: HOY }] }) }).pendientes, 1);
+  // una gestión de OTRO día no cuenta; una llamada legacy identificable en historial sí
+  assert.equal(cob2({ c: cuenta({ gestiones: [{ tipo: "gestion", fecha: "2026-09-20" }] }) }).pendientes, 1);
+  assert.equal(cob2({ c: cuenta({ historial: [{ tipo: "llamada", fecha: `${HOY}T10:00:00` }] }) }).pendientes, 0);
+  // una gestión guardada con hora ISO por CallCenterV2 también se reconoce
+  assert.equal(cob2({ c: cuenta({ gestiones: [{ tipo: "gestion", fecha: new Date(2026, 8, 24, 15, 30).toISOString() }] }) }).pendientes, 0);
+});
+test("Seguimientos de hoy: proximo_seguimiento o promesa hoy, cada cuenta UNA vez", () => {
+  assert.equal(cob2({ a: cuenta({ proximo_seguimiento: HOY }) }).seguimientosHoy, 1);             // seguimiento hoy
+  assert.equal(cob2({ a: cuenta({ promesa: { fecha: HOY, monto: 50 } }) }).seguimientosHoy, 1);   // promesa hoy
+  assert.equal(cob2({ a: cuenta({ proximo_seguimiento: HOY, promesa: { fecha: HOY } }) }).seguimientosHoy, 1);  // ambas: una vez
+  assert.equal(cob2({ a: cuenta({ proximo_seguimiento: "2026-09-30" }) }).seguimientosHoy, 0);
+  // recordatorio de Agenda de la MISMA cuenta no la duplica; uno sin cuenta sí suma
+  const rec = (x: any) => ({ id: Math.random(), tipo: "llamada", fecha: `${HOY}T11:00`, createdByUid: "tlk1", ...x });
+  assert.equal(cob2({ a: cuenta({ proximo_seguimiento: HOY }) }, [rec({ sourceSection: "cobranza", sourceRecordId: "a" })]).seguimientosHoy, 1);
+  assert.equal(cob2({ a: cuenta({ proximo_seguimiento: HOY }) }, [rec({})]).seguimientosHoy, 2);
+});
+test("Compromisos = promesas reales vigentes; la tarjeta abre Cobranza", () => {
+  const r = cob2({
+    hoy: cuenta({ promesa: { fecha: HOY, monto: 90 } }),
+    fut: cuenta({ promesa: { fecha: "2026-10-05", monto: 120 } }),
+    vieja: cuenta({ promesa: { fecha: "2026-09-20" } }),          // vencida: no es compromiso vigente
+    rota: cuenta({ promesa: null }),                              // incumplida (promesa en null)
+    nada: cuenta(),
+  }, [{ id: 1, tipo: "llamada", fecha: "2026-09-28T10:00", createdByUid: "tlk1" }]);   // recordatorio futuro: NO es compromiso
+  assert.equal(r.compromisos, 2);
+  assert.deepEqual(DESTINOS.cCompromisos, { tab: "cobranza" });
+});
+test("Ventas: Distribución sin campo estado es un dato fresco que cuenta en Por llamar", () => {
+  const r = ventasResumen({ distribucion: [{ id: "dx", assignedTo: "ven", estado: undefined }] }, [], {}, { uid: "ven", nombre: "Ven", now: NOW });
+  assert.equal(r.miCartera, 1);                                      // pertenece a la cartera de Ventas
+  assert.equal(r.porLlamar, 1);
+  // y la de Cobranza no la ve
+  assert.equal(cobranzaResumen({ distribucion: [{ id: "dx", assignedTo: "cob" }] }, [], { uid: "cob", nombre: "C", now: NOW }).miCartera, 0);
 });
