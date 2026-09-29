@@ -62,6 +62,27 @@ crm_telemarketing/*                sistema viejo: congelado, nunca se borra
 - **Asignar/reasignar:** transacción + `update()` de solo campos de asignación. Notas, mensajes, historial, llamadas, citas y seguimientos no viajan en la escritura.
 - **Mover de app:** solo Súper Admin, con cupo en destino y sin registros asignados.
 
+## Agenda v2 (solo ACCESS_V2)
+- Lógica pura en `src/services/agendaV2.ts`; botones y paneles en `src/components/agenda/AgendaV2Extras.tsx`.
+- La cita se confirma en la llamada: no hay estados "por confirmar/confirmada" ni asignación obligatoria (`assignedTo: null` es válido).
+- Hora LOCAL del navegador (Texas) en fechas por defecto, Hoy / Próximas / Sin resultado y Centro de mando (`localDateTimeValue`, `fechaLocal`), nunca `toISOString()`.
+- Quien agenda (`createdByUid/Name`) no es quien visita: el resultado lo registra el staff y queda `resultByUid/Name/At`. La TLK crea, edita datos, reprograma y cancela sus citas; no registra resultados (UI, store y Rules).
+- Reprogramar (antes de la visita): misma cita + `reprogramHistory` (`reason: "before_visit"`). Reprogramada en visita: la original conserva fecha y resultado; se crea una cita nueva con el creador original, `reprogrammedFromApptId` y `createdFrom: "reprogramada_visita"`. Cuenta como Visita, no como Demo ni Venta.
+- Cancelar (`status: "cancelada"`, `cancelledAt/ByUid/ByName`, `cancelReason`) en vez de borrar; el borrado físico queda solo para Súper Admin/Distribuidor. Las canceladas no cuentan en Centro de mando ni en "Sin resultado".
+- Venta desde la Agenda: se localiza el registro por `sourceSection/sourceRecordId/sourceRefIndex`; el teléfono solo se usa en citas antiguas sin traza.
+- Google Calendar dice "Agendada por"; Apple Calendar por archivo .ics; "Cómo llegar" con la dirección de la cita. Sin `TEAM_CONTACTS` en v2.
+- **Seguridad r2 (firestore.rules `appts`):**
+  - CREATE de telemarketing: `createdByUid == uid`, `assignedTo == null` (no existe asignación de vendedor; así nadie hace visible un cliente a otra TLK), tipo permitido por rol (`apptTypeAllowed` = `TIPOS_AGENDA_POR_ROL`: ventas cita/llamada · cobranza llamada · reclutamiento entrevista/llamada), `_type == tipo` y nace limpia (sin resultado, cancelación, `resultBy*`, monto, cartucho_meses, `reprogramHistory`, `createdFrom`, `reprogrammedFromApptId`, servicio*, `_sincronizado`, `_cliente*`). El staff no tiene estas limitaciones.
+  - UPDATE de telemarketing por **allowlist** (`affectedKeys().hasOnly`): nombre, telefono, direccion, ciudad, cp, fecha, notas, reprogramHistory y los campos de cancelación. Cualquier otro campo (presente o futuro) queda fuera.
+  - Cancelar: solo a `cancelada`, con `cancelledByUid == uid` y `cancelledAt`. Una cita cancelada es solo lectura para la TLK (no reactiva ni edita); el staff la gestiona.
+  - Reprogramar: cambiar `fecha` exige agregar UNA entrada a `reprogramHistory` (se conservan las anteriores) con `changedByUid == uid`, `reason == "before_visit"` y `newDate == fecha`.
+  - **Nombres (decisión):** `createdByName` y `cancelledByName` NO se validan contra `users/{uid}.nombre`: el servidor puede renombrar usuarios (`usersCore.rename`) y una sesión abierta conservaría el nombre anterior, lo que rechazaría citas legítimas. El **UID es la autoridad**; el nombre es de presentación y lo genera el store desde el usuario autenticado.
+  - **r3 — cita con resultado = solo lectura para la TLK:** si `resultado` no está vacío (incluye legacy `venta`/`no_venta`), la TLK no edita, no cambia fecha, no reprograma ni cancela; puede verla, llamar, escribir por WhatsApp y abrir Maps. El staff la sigue gestionando. Mismo criterio en Rules (`tmActualizaOk`), store y UI (`accionesCitaV2`).
+  - **r3 — registro de origen en CREATE de telemarketing (`tmSourceOk`):** sin `sourceRecordId`/`sourceSection`/`sourceRefIndex` = cita manual (permitida). Si vienen: el registro debe existir en el mismo workspace, con la misma sección, `assignedTo == uid` y sección de SU especialidad (`seccionDeRol` = `SECTIONS_FOR_ROLE`). Ruta real según `docIdFor`: Cobranza en `records/cob_<clave>` (la app usa la clave como id), el resto en `records/<id>`. Referidos: se valida el anfitrión; sin `sourceRefIndex` es la cita del anfitrión (permitida); si viene, es la POSICIÓN del referido (lista, o valores de un mapa legacy en orden, no la clave) y debe ser menor que el tamaño de `referidos`, que debe existir. El staff no tiene esta restricción.
+  - El store (`storeCore.apptDoc`) aplica los mismos criterios para no intentar escrituras que Firestore rechazaría.
+- `EntrevistaModal` en v2: sin invitados precargados ni lista de `TEAM_CONTACTS` (correos de la app legacy); se conserva "Otro correo". Legacy sin cambios.
+- Duplicados: la misma advertencia (Volver / Guardar de todos modos) al agendar desde la Agenda y desde Llamadas → Cita agendada; primero por `sourceRecordId`/`sourceRefIndex`, teléfono solo en citas sin traza. La TLK solo compara contra las citas que puede leer (las suyas). Tras guardar desde Llamadas se ofrecen Google y Apple Calendar.
+
 ## Índices
 Todas las consultas son de igualdad (`assignedTo`, `section`, `appId`, `status`): Firestore las resuelve con sus índices automáticos. `firestore.indexes.json` queda vacío a propósito.
 
