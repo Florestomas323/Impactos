@@ -140,19 +140,30 @@ service cloud.firestore {
       }
 
       // ── Config compartida de la app ──────────────────────────────────────
-      // Mismo mapa que src/data/storeCore.ts (SHARED_WRITERS).
+      // MISMAS listas que src/data/schema.ts (SHARED_READ_KEYS_BY_ROLE /
+      // SHARED_WRITE_KEYS_BY_ROLE); tests/rutasCumple.test.ts verifica que coincidan.
+      // Staff lee y escribe todo. Cada telemarketing, SOLO lo que su operación usa y no
+      // trae clientes ajenos: nunca rutas, cumpleanos, notificaciones ni cumpleNotifs
+      // (sus versiones personales viven en userData/{uid}), ni incentivos…
       match /shared/{docId} {
-        function writerOk() {
-          return staffOrSuper(appId)
-            || (inApp(appId) && docId in ['cofreAperturas', 'notificaciones', 'cumpleNotifs'])
-            || (inApp(appId) && me().role == 'telemarketing_reclutamiento' && docId in ['socios', 'docsSocios'])
-            || (inApp(appId) && me().role == 'telemarketing_cobranza' && docId == 'cobranza');
+        function tmLee() {
+          return inApp(appId) && (
+               (me().role == 'telemarketing_ventas'        && docId in ['catalogoCustom', 'cumpleMsgTpl', 'callLog'])
+            || (me().role == 'telemarketing_cobranza'      && docId in ['cobranza'])
+            || (me().role == 'telemarketing_reclutamiento' && docId in ['socios', 'docsSocios']));
         }
-        allow read:  if isSuper() || inApp(appId);
-        allow write: if writerOk() && docId != 'callLog';   // el histórico de llamadas es solo lectura
+        function tmEscribe() {
+          return inApp(appId) && (
+               (me().role == 'telemarketing_ventas'        && docId in [])
+            || (me().role == 'telemarketing_cobranza'      && docId in ['cobranza'])
+            || (me().role == 'telemarketing_reclutamiento' && docId in ['socios', 'docsSocios']));
+        }
+        allow read:  if staffOrSuper(appId) || tmLee();
+        allow write: if (staffOrSuper(appId) || tmEscribe()) && docId != 'callLog';   // el histórico de llamadas es solo lectura
       }
 
-      // ── Datos propios de cada persona (su conteo de llamadas) ────────────
+      // ── Datos propios de cada persona (llamadas, rutas, cumpleaños y notificaciones personales) ──
+      // Cada quien lee y escribe SOLO el suyo; el staff lee el del equipo (Rutas del equipo).
       match /userData/{userId} {
         allow read:  if staffOrSuper(appId) || (inApp(appId) && userId == uid());
         allow write: if inApp(appId) && userId == uid();
