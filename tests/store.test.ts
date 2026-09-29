@@ -101,7 +101,11 @@ test("claves compartidas: staff escribe; telemarketing solo las suyas", () => {
   const { ops, blocked } = diffState(prev, { ...prev, incentivos: [] }, d, tm);
   assert.equal(ops.length, 0); assert.deepEqual(blocked, ["incentivos"]);
   assert.equal(diffState(prev, { ...prev, incentivos: [] }, d, staff).ops.length, 1);
-  assert.ok(canWriteShared("telemarketing_ventas", "cofreAperturas"));
+  // v2: ningún telemarketing usa el cofre (solo staff) ni escribe las notificaciones globales
+  // (las suyas viven en su userData; ver tests/rutasCumple.test.ts)
+  assert.ok(!canWriteShared("telemarketing_ventas", "cofreAperturas"));
+  assert.ok(!canWriteShared("telemarketing_ventas", "notificaciones"));
+  assert.ok(canWriteShared("distribuidor", "notificaciones"));
   assert.ok(canWriteShared("telemarketing_reclutamiento", "socios"));
   assert.ok(!canWriteShared("telemarketing_ventas", "socios"));
   // el sistema de acceso viejo no viaja
