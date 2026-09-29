@@ -8,6 +8,8 @@ import { Ico } from "../../iconos";
 import { genId } from "../../utils/ids";
 import { asList } from "../../services/assignments";
 import { trazaRegistro } from "../../services/apptTrace";
+import { citaDesdeLlamada, revisarDuplicado } from "../../services/agendaV2";
+import { AvisoDuplicadoV2, CalendariosV2 } from "../agenda/AgendaV2Extras";
 import {
   Especialidad, RESULTADOS, PASOS_EN_PROCESO, resultadosPara, ETAPAS, Item, Priorizado, Datos,
   itemsDe, priorizar, kpis, validarResultado, resultadoDe, aplicarResultado, completarSeguimiento, agregarNotaV2, diaLocal, etapaDe,
@@ -71,6 +73,8 @@ export function CallCenterV2({ user, esp, state, setSection, setAppts, onCallLog
   const [citaDe, setCitaDe] = useState<{ it: Item; nota?: string } | null>(null);
   const [entrevistaDe, setEntrevistaDe] = useState<{ it: Item; nota?: string } | null>(null);
   const [aviso, setAviso] = useState("");
+  const [dupCita, setDupCita] = useState<{ appt: any; existente: any } | null>(null);   // posible cita duplicada
+  const [citaGuardada, setCitaGuardada] = useState<any>(null);                         // → Google / Apple Calendar
 
   // ── Escritura: siempre sobre el registro real (referido dentro de su anfitrión; cobranza en clientesData) ──
   const actualizar = (it: Item, fn: (r: any) => any) => {
@@ -106,12 +110,18 @@ export function CallCenterV2({ user, esp, state, setSection, setAppts, onCallLog
     setResModal(null);
   };
   // Cita desde un registro: trazabilidad + NO se asigna al TLK (createdByUid lo pone el sistema central)
-  const guardarCita = (appt: any) => {
+  const guardarCita = (appt: any, forzar = false) => {
     const it = citaDe!.it;
-    try { window.open(gcalLink(appt), "_blank"); } catch {}
-    setAppts((p: any[]) => [{ ...appt, ...trazaRegistro(it), id: genId(), _type: appt.tipo }, ...p]);
+    const nueva = citaDesdeLlamada(appt, trazaRegistro(it), genId());
+    const existente = revisarDuplicado(state?.appts, nueva, forzar);   // aviso, nunca bloqueo
+    if (existente) { setDupCita({ appt, existente }); return; }
+    setDupCita(null);
+    const conAutor = { ...nueva, createdByName: user.nombre };
+    try { window.open(gcalLink(conAutor), "_blank"); } catch {}
+    setAppts((p: any[]) => [nueva, ...p]);
     guardarResultado(it, "cita_agendada", { nota: [citaDe!.nota, appt.notas].filter(Boolean).join(" · "), fechaCita: appt.fecha });
     setCitaDe(null);
+    setCitaGuardada(conAutor);
   };
   const guardarEntrevista = (dd: any) => {
     const it = entrevistaDe!.it;
@@ -247,6 +257,10 @@ export function CallCenterV2({ user, esp, state, setSection, setAppts, onCallLog
         </div>
       )}
       {aviso && <div className="text-sm font-bold rounded-xl px-3 py-2 text-emerald-700 bg-emerald-50 border border-emerald-200 flex justify-between"><span>✓ {aviso}</span><button onClick={() => setAviso("")}>×</button></div>}
+      {citaGuardada && <div className="text-xs rounded-xl px-3 py-2 text-emerald-800 bg-emerald-50 border border-emerald-200">
+        <div className="flex justify-between font-bold"><span>Cita de {citaGuardada.nombre}: agregar a tu calendario</span><button onClick={() => setCitaGuardada(null)}>×</button></div>
+        <CalendariosV2 appt={citaGuardada} titulo={`📋 Cita - ${citaGuardada.nombre}`} gcal={gcalLink(citaGuardada)} />
+      </div>}
 
       <div className="flex gap-1.5 overflow-x-auto pb-1">
         {TABS.map(([id, t]) => (
@@ -410,9 +424,11 @@ export function CallCenterV2({ user, esp, state, setSection, setAppts, onCallLog
       )}
 
       {citaDe && (
-        <Modal title={`Agendar visita · ${citaDe.it.nombre}`} onClose={() => setCitaDe(null)}>
-          <AppointmentForm client={{ ...citaDe.it.raw, nombre: citaDe.it.nombre, telefono: citaDe.it.telefono, direccion: citaDe.it.direccion, ciudad: citaDe.it.ciudad, cp: citaDe.it.cp }}
-            forceTipo="cita" agenteActivo={user.nombre} onSave={guardarCita} onClose={() => setCitaDe(null)} />
+        <Modal title={`Agendar visita · ${citaDe.it.nombre}`} onClose={() => { setCitaDe(null); setDupCita(null); }}>
+          {/* El formulario sigue montado (oculto) durante el aviso: "Volver" conserva lo escrito. */}
+          {dupCita && <AvisoDuplicadoV2 existente={dupCita.existente} onVolver={() => setDupCita(null)} onGuardar={() => guardarCita(dupCita.appt, true)} />}
+          <div style={dupCita ? { display: "none" } : undefined}><AppointmentForm client={{ ...citaDe.it.raw, nombre: citaDe.it.nombre, telefono: citaDe.it.telefono, direccion: citaDe.it.direccion, ciudad: citaDe.it.ciudad, cp: citaDe.it.cp }}
+            forceTipo="cita" agenteActivo={user.nombre} onSave={(a: any) => guardarCita(a)} onClose={() => setCitaDe(null)} /></div>
         </Modal>
       )}
       {entrevistaDe && <EntrevistaModal prospecto={entrevistaDe.it.raw} agente={user.nombre} onSave={guardarEntrevista} onClose={() => setEntrevistaDe(null)} />}
