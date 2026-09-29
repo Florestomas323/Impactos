@@ -7,7 +7,7 @@
 // Aquí se LEEN de forma segura (asList) para contar y calcular, pero el valor
 // original viaja al registro nuevo EXACTAMENTE como estaba. Cada forma
 // inesperada queda anotada en los avisos del reporte: nada se oculta.
-import { Section, SECTIONS, SECTION_ASSIGNMENT, MIGRATION_VERSION, LEGACY_SOURCE, docIdFor, RecordDoc, isSharedKey, COBRANZA_SHARED_DOC } from "../data/schema";
+import { Section, SECTIONS, SECTION_ASSIGNMENT, MIGRATION_VERSION, LEGACY_SOURCE, docIdFor, RecordDoc, isSharedKey, COBRANZA_SHARED_DOC, completarContactoCobranza } from "../data/schema";
 import { deriveWorkStatus, asList, asEntries, shapeOf } from "./assignments";
 
 const LIST_SECTIONS: Section[] = ["agregados", "referidos", "prospectos", "distribucion", "reclutamiento"];
@@ -182,7 +182,7 @@ export function toRecordDoc(raw: any, section: Section, appId: string, nowISO: s
   return doc as RecordDoc;
 }
 
-export type Plan = { records: RecordDoc[]; appts: any[]; shared: Record<string, any>; warnings: string[]; shapeWarnings: ShapeWarning[]; sinId: number };
+export type Plan = { records: RecordDoc[]; appts: any[]; shared: Record<string, any>; warnings: string[]; shapeWarnings: ShapeWarning[]; sinId: number; cobranzaCompletadas?: number };
 
 // Construye TODO lo que se va a escribir, sin escribir nada todavía.
 export function planMigration(estado: any, appId: string, now: Date = new Date(), joinWarnings: string[] = []): Plan {
@@ -194,6 +194,9 @@ export function planMigration(estado: any, appId: string, now: Date = new Date()
   let sinId = 0;
   const items = sourceItems(estado, warnings);
   const distIds = new Set<string>(items.filter((i) => i.section === "distribucion").map((i) => legacyIdOf(i, estado)).filter(Boolean));
+  const distPorId: Record<string, any> = {};
+  items.filter((i) => i.section === "distribucion").forEach((i) => { const id = legacyIdOf(i, estado); if (id) distPorId[id] = i.raw; });
+  let cobranzaCompletadas = 0;
 
   items.forEach((it) => {
     const legacyId = legacyIdOf(it, estado);
@@ -203,7 +206,12 @@ export function planMigration(estado: any, appId: string, now: Date = new Date()
       return;
     }
     shapeWarnings.push(...inspectShape(it.raw, it.section, legacyId));
-    const doc = toRecordDoc(it.raw, it.section, appId, nowISO, distIds, legacyId);
+    let doc = toRecordDoc(it.raw, it.section, appId, nowISO, distIds, legacyId);
+    // Cobranza autosuficiente: copia (sin sobrescribir) nombre/teléfono/cuenta/dirección/ciudad/cp del cliente enlazado.
+    if (doc.section === "cobranza" && doc.linkedRecordId && distPorId[doc.linkedRecordId]) {
+      const r = completarContactoCobranza(doc, { ...distPorId[doc.linkedRecordId], id: doc.linkedRecordId });
+      if (r.campos.length) { doc = r.doc; cobranzaCompletadas++; }
+    }
     if (vistos.has(doc.id)) { warnings.push(`${it.section}: id repetido ${legacyId} — se omite la copia`); return; }
     vistos.add(doc.id); records.push(doc);
   });
@@ -234,7 +242,7 @@ export function planMigration(estado: any, appId: string, now: Date = new Date()
   const cobranzaResto: any = { ...(estado?.cobranza && typeof estado.cobranza === "object" ? estado.cobranza : {}) };
   delete cobranzaResto.clientesData;
   shared[COBRANZA_SHARED_DOC] = cobranzaResto;
-  return { records, appts, shared, warnings, shapeWarnings, sinId };
+  return { records, appts, shared, warnings, shapeWarnings, sinId, cobranzaCompletadas };
 }
 
 // ── Verificación: origen contra lo planeado ─────────────────────────────────
@@ -245,7 +253,7 @@ export type Report = {
   notasAntes: number; notasDespues: number;
   historialAntes: number; historialDespues: number;
   duplicados: number; perdidos: string[];
-  cobranzaEnlazados: number; huerfanosCobranza: number; sinIdValido: number;
+  cobranzaEnlazados: number; huerfanosCobranza: number; sinIdValido: number; cobranzaCompletadas: number;
   citas: number;
   ok: boolean; warnings: string[]; shapeWarnings: ShapeWarning[];
 };
@@ -286,6 +294,7 @@ export function verifyMigration(estado: any, plan: Plan, appId: string, now: Dat
     cobranzaEnlazados: plan.records.filter((r) => r.section === "cobranza" && !!r.linkedRecordId).length,
     huerfanosCobranza: plan.records.filter((r) => r.section === "cobranza" && !r.linkedRecordId).length,
     sinIdValido: plan.sinId,
+    cobranzaCompletadas: plan.cobranzaCompletadas || 0,
     citas: plan.appts.length,
     ok, warnings: plan.warnings, shapeWarnings: plan.shapeWarnings,
   };
@@ -310,6 +319,7 @@ export function formatReport(r: Report, maxDetalle = 300): string {
   L.push(`Registros perdidos:            ${r.perdidos.length}${r.perdidos.length ? " → " + r.perdidos.slice(0, 20).join(", ") : ""}`);
   L.push(`Cobranza enlazada a Distribución: ${r.cobranzaEnlazados}`);
   L.push(`Cobranza sin linkedRecordId:      ${r.huerfanosCobranza} (normal: entradas del reporte Hy Cite sin cliente en la base)`);
+  L.push(`Cobranza con contacto completado desde Distribución: ${r.cobranzaCompletadas} (copia; no se movió nada comercial)`);
 
   // Formas inesperadas: resumen agrupado + detalle por registro.
   if (r.shapeWarnings.length) {

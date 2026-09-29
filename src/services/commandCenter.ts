@@ -96,11 +96,12 @@ const misAppts = (appts: any[], c: Ctx) => vivos(appts).filter((a: any) => esCit
 
 export function ventasResumen(state: any, appts: any[], callLog: any, c: Ctx) {
   const now = c.now || new Date(); const hoy = diaLocal(now);
-  const cartera = [...mios(state?.agregados, c.uid), ...mios(state?.prospectos, c.uid), ...mios(state?.referidos, c.uid)];
+  const cartera = [...mios(state?.agregados, c.uid), ...mios(state?.prospectos, c.uid), ...mios(state?.referidos, c.uid), ...mios(state?.distribucion, c.uid)];
   const citas = misAppts(appts, c).filter((a: any) => tipoAppt(a) === "cita");
   return {
     miCartera: cartera.length,
-    porLlamar: cartera.filter((r: any) => ["sin_estado", "naranja"].includes(r.estado)).length,   // misma regla que el Dashboard actual
+    // Sin campo estado = "sin_estado" (dato fresco), igual que la bandeja de Llamadas.
+    porLlamar: cartera.filter((r: any) => ["sin_estado", "naranja"].includes(r.estado || "sin_estado")).length,
     seguimientos: cartera.filter((r: any) => r.proximo_seguimiento && r.proximo_seguimiento <= hoy).length,
     citasHoy: citas.filter((a: any) => diaAppt(a) === hoy).length,
     // DATOS → LLAMADAS → CONTACTO → CITA
@@ -117,15 +118,32 @@ export function cobranzaResumen(state: any, appts: any[], c: Ctx) {
   const now = c.now || new Date(); const hoy = diaLocal(now);
   const cuentas = Object.entries(state?.cobranza?.clientesData || {})
     .map(([id, v]: any) => ({ ...v, id })).filter((r: any) => !r.eliminado && r.assignedTo === c.uid);
-  const gestionHoy = (r: any) => asList(r.historial).some((h: any) => diaHist(h?.fecha) === hoy);
-  const recordatorios = misAppts(appts, c).filter((a: any) => tipoAppt(a) === "llamada" || tipoAppt(a) === "recordatorio");
+  // ¿Se gestionó hoy? Las llamadas de Cobranza viven en `gestiones` (CallCenterV2).
+  // `historial` es de pagos/promesas: un pago o una promesa NO es una llamada.
+  // Compatibilidad: solo entradas de historial identificables como llamada/gestión.
+  const GESTION = ["gestion", "llamada", "seguimiento_completado"];
+  const gestionHoy = (r: any) =>
+    asList(r.gestiones).some((g: any) => g && GESTION.includes(g.tipo) && diaHist(g.fecha) === hoy)
+    || asList(r.historial).some((h: any) => h && (h.tipo === "llamada" || h.tipo === "gestion") && diaHist(h.fecha) === hoy);
   const promesa = (r: any) => String(r?.promesa?.fecha || "").slice(0, 10);
+  const seguimiento = (r: any) => String(r?.proximo_seguimiento || "").slice(0, 10);
+  // Seguimientos de hoy: cuentas ÚNICAS con seguimiento o promesa hoy.
+  const hoyIds = new Set(cuentas.filter((r: any) => seguimiento(r) === hoy || promesa(r) === hoy).map((r: any) => String(r.id)));
+  // Recordatorios de Agenda de hoy: suman solo si son OTRO evento (no de una cuenta ya contada).
+  let extras = 0;
+  misAppts(appts, c).filter((a: any) => ["llamada", "recordatorio"].includes(tipoAppt(a)) && diaAppt(a) === hoy).forEach((a: any) => {
+    if (a.sourceSection === "cobranza" && a.sourceRecordId) {
+      const id = String(a.sourceRecordId);
+      if (cuentas.some((r: any) => String(r.id) === id)) { hoyIds.add(id); return; }   // misma cuenta: una sola vez
+    }
+    extras++;
+  });
   return {
     miCartera: cuentas.length,
     pendientes: cuentas.filter((r: any) => !gestionHoy(r)).length,                  // sin gestión hoy
-    seguimientosHoy: cuentas.filter((r: any) => promesa(r) === hoy).length + recordatorios.filter((a: any) => diaAppt(a) === hoy).length,
-    compromisos: cuentas.filter((r: any) => promesa(r) && promesa(r) >= hoy).length + recordatorios.filter((a: any) => diaAppt(a) > hoy).length,
-    clientesDistribucion: mios(state?.distribucion, c.uid).length,
+    seguimientosHoy: hoyIds.size + extras,
+    // Compromisos = promesas de pago reales y vigentes (no recordatorios de Agenda).
+    compromisos: cuentas.filter((r: any) => promesa(r) && promesa(r) >= hoy).length,
   };
 }
 
@@ -190,9 +208,9 @@ export const DESTINOS: Record<string, Destino> = {
   vfCitas: { tab: "agenda", intent: { filtro: "todas", filtroTipo: "cita" } },
   // Telemarketing Cobranza
   cCartera: { tab: "cobranza" }, cPendientes: { tab: "cobranza" }, cSeguimientos: { tab: "cobranza" },
-  cCompromisos: { tab: "agenda", intent: { filtro: "proximas", filtroTipo: "llamada" } },
+  cCompromisos: { tab: "cobranza" },   // las promesas viven en Cobranza (aún sin filtro directo)
   cContinuar: { tab: "cobranza" },
-  cLlamar: { tab: "llamadas", intent: { filterBase: "distribucion" } },
+  cLlamar: { tab: "llamadas" },   // su bandeja de Cobranza
   cAgendar: { tab: "agenda", intent: { abrirTipo: "llamada" } },
   // Telemarketing Reclutamiento
   rProspectos: { tab: "reclutamiento" }, rPorContactar: { tab: "reclutamiento" }, rSeguimientos: { tab: "reclutamiento" },
