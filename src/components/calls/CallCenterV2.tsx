@@ -11,6 +11,7 @@ import { trazaRegistro } from "../../services/apptTrace";
 import {
   Especialidad, RESULTADOS, PASOS_EN_PROCESO, resultadosPara, ETAPAS, Item, Priorizado, Datos,
   itemsDe, priorizar, kpis, validarResultado, resultadoDe, aplicarResultado, completarSeguimiento, agregarNotaV2, diaLocal, etapaDe,
+  Filtros, filtrarItems, sinFiltros, conteoEstados, conteoResultados, opcionesZona, resumenCartera, CATEGORIA_LABEL, PAGINA,
 } from "../../services/callWorkflow";
 
 type Props = {
@@ -45,13 +46,23 @@ export function CallCenterV2({ user, esp, state, setSection, setAppts, onCallLog
   const k: any = useMemo(() => kpis(items, esp, user.uid), [items, esp, user.uid]);
 
   const TABS = esp === "cobranza"
-    ? [["prioridad", "Prioridad"], ["promesas", "Promesas"], ["seguimientos", "Seguimientos"], ["hoy", "Trabajados hoy"], ["zonas", "Zonas"]]
+    ? [["todos", "Todos"], ["prioridad", "Prioridad"], ["promesas", "Promesas"], ["seguimientos", "Seguimientos"], ["hoy", "Trabajados hoy"], ["zonas", "Zonas"]]
     : esp === "reclutamiento"
-    ? [["prioridad", "Prioridad"], ["nuevos", "Nuevos"], ["seguimientos", "Seguimientos"], ["hoy", "Trabajados hoy"], ["etapas", "Etapas"]]
-    : [["prioridad", "Prioridad"], ["nuevos", "Nuevos"], ["seguimientos", "Seguimientos"], ["hoy", "Trabajados hoy"], ["estados", "Estados"], ["zonas", "Zonas"]];
+    ? [["todos", "Todos"], ["prioridad", "Prioridad"], ["nuevos", "Nuevos"], ["seguimientos", "Seguimientos"], ["hoy", "Trabajados hoy"], ["etapas", "Etapas"]]
+    : [["todos", "Todos"], ["prioridad", "Prioridad"], ["nuevos", "Nuevos"], ["seguimientos", "Seguimientos"], ["hoy", "Trabajados hoy"], ["estados", "Estados"], ["zonas", "Zonas"]];
   const [tab, setTab] = useState("prioridad");
-  const [q, setQ] = useState(""); const [ciudad, setCiudad] = useState(""); const [zip, setZip] = useState("");
-  const [ver, setVer] = useState(40);
+  // Filtros combinables (intersección) sobre la cartera real: texto, estados, último resultado, ciudades, ZIPs (+ etapas en Reclutamiento).
+  const [q, setQ] = useState("");
+  const [estadosSel, setEstadosSel] = useState<string[]>([]);
+  const [resultadosSel, setResultadosSel] = useState<string[]>([]);
+  const [ciudadesSel, setCiudadesSel] = useState<string[]>([]);
+  const [zipsSel, setZipsSel] = useState<string[]>([]);
+  const [etapasSel, setEtapasSel] = useState<string[]>([]);
+  const [ver, setVer] = useState(PAGINA);
+  const filtros: Filtros = { q, estados: estadosSel, resultados: resultadosSel, ciudades: ciudadesSel, zips: zipsSel };
+  const hayFiltros = !sinFiltros(filtros) || etapasSel.length > 0;
+  const limpiarFiltros = () => { setQ(""); setEstadosSel([]); setResultadosSel([]); setCiudadesSel([]); setZipsSel([]); setEtapasSel([]); setVer(PAGINA); setTab("todos"); };
+  const alternar = (arr: string[], set: (v: string[]) => void, v: string) => { set(arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]); setVer(PAGINA); };
   const [abierto, setAbierto] = useState<string | null>(null);
   const [resModal, setResModal] = useState<{ it: Item; id?: string } | null>(null);
   const [datos, setDatos] = useState<Datos>({});
@@ -112,13 +123,6 @@ export function CallCenterV2({ user, esp, state, setSection, setAppts, onCallLog
   };
 
   // ── Listas por pestaña ──
-  const filtro = (it: Item) => {
-    const t = q.trim().toLowerCase(), d = q.replace(/\D/g, "");
-    if (t && !(it.nombre.toLowerCase().includes(t) || it.ciudad.toLowerCase().includes(t) || (d.length >= 3 && it.telefono.replace(/\D/g, "").includes(d)) || String(it.raw.cuenta || it.raw.nroCuenta || "").toLowerCase().includes(t))) return false;
-    if (ciudad && !it.ciudad.toLowerCase().includes(ciudad.toLowerCase())) return false;
-    if (zip.replace(/\D/g, "").length === 5 && String(it.cp).replace(/\D/g, "").slice(0, 5) !== zip.replace(/\D/g, "").slice(0, 5)) return false;
-    return true;
-  };
   const conMotivo = (it: Item, motivo: string): Priorizado => ({ ...it, rank: 9, motivo });
   const lista: Priorizado[] = useMemo(() => {
     if (tab === "prioridad") return prio;
@@ -127,14 +131,19 @@ export function CallCenterV2({ user, esp, state, setSection, setAppts, onCallLog
       .map((i) => conMotivo(i, i.proximo < hoy ? `Vencido · ${fechaCorta(i.proximo)}` : i.proximo === hoy ? "Seguimiento hoy" : `Seguimiento ${fechaCorta(i.proximo)}`));
     if (tab === "promesas") return items.filter((i) => i.promesa).sort((a, b) => (a.promesa || "").localeCompare(b.promesa || "")).map((i) => conMotivo(i, `Promesa ${fechaCorta(i.promesa!)}`));
     if (tab === "hoy") return items.filter((i) => (i.raw.ultimo_llamado || "").slice(0, 10) === hoy || (i.ultimoContacto || "").slice(0, 10) === hoy).map((i) => conMotivo(i, `Trabajado hoy · ${resultadoDe(esp, i.raw.ultimoResultado)?.label || "registrado"}`));
-    return items.map((i) => conMotivo(i, ""));
+    // "todos", "estados", "zonas", "etapas": TODA la cartera asignada; la razón de prioridad se conserva si la tiene
+    const razon = new Map(prio.map((p) => [p.key, p.motivo]));
+    return items.map((i) => conMotivo(i, razon.get(i.key) || ""));
   }, [tab, prio, items, esp, hoy]);
-  const filtrada = lista.filter(filtro);
-  const grupos = (clave: (i: Item) => string) => {
-    const g: Record<string, Priorizado[]> = {};
-    filtrada.forEach((i) => { const c = clave(i) || "Sin dato"; (g[c] = g[c] || []).push(i); });
-    return Object.entries(g).sort((a, b) => b[1].length - a[1].length);
-  };
+  const filtrada = filtrarItems(lista, filtros).filter((i) => !etapasSel.length || etapasSel.includes(i.etapa || etapaDe(i.raw)));
+  // Conteos "facetados": cada selector cuenta sobre los OTROS filtros activos (sin contarse a sí mismo).
+  const catalogoEstados = Object.keys(estadoLabel);
+  const baseEstados = filtrarItems(items, { ...filtros, estados: [] });
+  const baseResultados = filtrarItems(items, { ...filtros, resultados: [] });
+  const baseZonas = filtrarItems(items, { ...filtros, ciudades: [], zips: [] });
+  const zonas = opcionesZona(baseZonas);
+  const resumen = resumenCartera(items, prio, esp);
+  const selectorSinEleccion = (tab === "estados" && !estadosSel.length && !resultadosSel.length) || (tab === "zonas" && !ciudadesSel.length && !zipsSel.length) || (tab === "etapas" && !etapasSel.length);
 
   // ── Tarjeta ──
   const Tarjeta = ({ it }: { it: Priorizado }) => {
@@ -203,13 +212,25 @@ export function CallCenterV2({ user, esp, state, setSection, setAppts, onCallLog
       </div>
 
       <section className={`grid grid-cols-2 ${cuatro.length === 5 ? "sm:grid-cols-5" : "sm:grid-cols-4"} gap-2`}>
-        {cuatro.map(([t, n]: any) => (
+        {cuatro.map(([t, n]: any, i: number) => i === 0 ? (
+          <button key={t} onClick={() => { setTab("todos"); setVer(PAGINA); }} className="text-left bg-white rounded-2xl border border-[#C7D2FE] p-3 hover:border-[#2563EB] transition">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-[#2563EB]">{t} ›</div>
+            <div className="text-2xl font-black text-[#111827]">{n}</div>
+          </button>
+        ) : (
           <div key={t} className="bg-white rounded-2xl border border-[#E5E7EB] p-3">
             <div className="text-[10px] font-bold uppercase tracking-wider text-[#667085]">{t}</div>
             <div className="text-2xl font-black text-[#111827]">{n}</div>
           </div>
         ))}
       </section>
+
+      {/* Dónde está cada registro de la cartera (una categoría por registro) */}
+      <div className="text-[13px] text-[#475569] flex flex-wrap gap-x-3 gap-y-1">
+        {(["prioridad", "cita", "seguimientoFuturo", "cerrado", "invalido", "sinDatos", "otros"] as const).filter((c) => (resumen as any)[c] > 0).map((c) => (
+          <span key={c}><b className="text-[#111827]">{(resumen as any)[c]}</b> {CATEGORIA_LABEL[c]}</span>
+        ))}
+      </div>
 
       <section className="bg-white rounded-2xl border border-[#E5E7EB] p-3 flex items-center gap-2 flex-wrap text-sm">
         <span className="text-[10px] font-bold uppercase tracking-wider text-[#667085] mr-1">Hoy</span>
@@ -231,30 +252,111 @@ export function CallCenterV2({ user, esp, state, setSection, setAppts, onCallLog
         {TABS.map(([id, t]) => (
           <button key={id} onClick={() => { setTab(id); setVer(40); }}
             className={`shrink-0 px-3.5 py-2 rounded-xl text-sm font-bold ${tab === id ? "text-white" : "text-[#475569] bg-white border border-[#E2E8F0]"}`}
-            style={tab === id ? { background: "#2563EB" } : undefined}>{t}{id === "prioridad" ? ` ${prio.length}` : ""}</button>
+            style={tab === id ? { background: "#2563EB" } : undefined}>{t}{id === "prioridad" ? ` ${prio.length}` : id === "todos" ? ` ${items.length}` : ""}</button>
         ))}
       </div>
-      <div className="grid grid-cols-3 gap-2">
-        <input className={inpLight + " col-span-3 sm:col-span-1"} placeholder="Buscar nombre, teléfono o cuenta" value={q} onChange={(e) => setQ(e.target.value)} />
-        <input className={inpLight + " col-span-2 sm:col-span-1"} placeholder="Ciudad" value={ciudad} onChange={(e) => setCiudad(e.target.value)} />
-        <input className={inpLight} placeholder="ZIP" inputMode="numeric" value={zip} onChange={(e) => setZip(e.target.value)} />
-      </div>
+      <input className={inpLight} placeholder="Buscar nombre, teléfono o cuenta" value={q} onChange={(e) => { setQ(e.target.value); setVer(PAGINA); }} />
+      {hayFiltros && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="font-bold text-[#667085] mr-1">Filtros:</span>
+          {estadosSel.map((e) => <span key={"e" + e} className="px-2 py-1 rounded-lg bg-[#EEF2FF] text-[#3730A3] font-bold">{estadoLabel[e]?.label || e}</span>)}
+          {resultadosSel.map((r) => <span key={"r" + r} className="px-2 py-1 rounded-lg bg-[#F5F3FF] text-[#6D28D9] font-bold">Último: {resultadoDe(esp, r)?.label || r}</span>)}
+          {ciudadesSel.map((c) => <span key={"c" + c} className="px-2 py-1 rounded-lg bg-[#EEF2FF] text-[#3730A3] font-bold">{zonas.find((z) => z.clave === c)?.nombre || c}</span>)}
+          {zipsSel.map((z) => <span key={"z" + z} className="px-2 py-1 rounded-lg bg-[#EEF2FF] text-[#3730A3] font-bold">{z}</span>)}
+          {etapasSel.map((e) => <span key={"t" + e} className="px-2 py-1 rounded-lg bg-[#F5F3FF] text-[#6D28D9] font-bold">{ETAPAS.find((x) => x.id === e)?.label || e}</span>)}
+          {q.trim() && <span className="px-2 py-1 rounded-lg bg-[#F1F5F9] text-[#334155] font-bold">“{q.trim()}”</span>}
+          <button onClick={limpiarFiltros} className="ml-auto px-3 py-1.5 rounded-lg border border-[#E2E8F0] bg-white font-bold text-[#111827]">Limpiar filtros</button>
+        </div>
+      )}
 
-      {["estados", "zonas", "etapas"].includes(tab) ? (
-        <div className="space-y-4">
-          {grupos((i) => tab === "estados" ? (estadoLabel[i.estado]?.label || i.estado) : tab === "etapas" ? (ETAPAS.find((e) => e.id === (i.etapa || etapaDe(i.raw)))?.label || "") : (i.ciudad || "").trim()).map(([g, arr]) => (
-            <div key={g}>
-              <div className="text-xs font-black uppercase tracking-wider text-[#667085] mb-2">{g} · {arr.length}</div>
-              <div className="space-y-2">{arr.slice(0, 20).map((it) => <Tarjeta key={it.key} it={it} />)}</div>
-              {arr.length > 20 && <div className="text-[11px] text-[#94A3B8] mt-1">+{arr.length - 20} más (usa el buscador)</div>}
+      {tab === "estados" && (
+        <section className="bg-white rounded-2xl border border-[#E5E7EB] p-3 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-[#667085]">Estado del cliente</div>
+            <div className="flex gap-2">
+              <button onClick={() => { setEstadosSel(conteoEstados(baseEstados, catalogoEstados).filter((x) => x.n > 0).map((x) => x.id)); setVer(PAGINA); }} className="text-xs font-bold px-2.5 py-1.5 rounded-lg border border-[#E2E8F0]">Todos los estados</button>
+              {estadosSel.length > 0 && <button onClick={() => { setEstadosSel([]); setVer(PAGINA); }} className="text-xs font-bold px-2.5 py-1.5 rounded-lg border border-[#E2E8F0]">Limpiar selección</button>}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+            {conteoEstados(baseEstados, catalogoEstados).map(({ id, n }) => {
+              const on = estadosSel.includes(id), e = estadoLabel[id];
+              return (
+                <button key={id} onClick={() => alternar(estadosSel, setEstadosSel, id)} disabled={n === 0 && !on}
+                  className={`flex items-center gap-2 text-left px-3 py-2.5 rounded-xl border text-[13px] font-bold transition ${on ? "border-[#2563EB] bg-[#EFF6FF] text-[#1E3A8A]" : n === 0 ? "border-[#F1F5F9] text-[#CBD5E1] bg-white" : "border-[#E2E8F0] text-[#111827] bg-white hover:border-[#93C5FD]"}`}>
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: e?.hex || "#94A3B8", opacity: n === 0 && !on ? 0.35 : 1 }} />
+                  <span className="flex-1 leading-tight">{e?.label || id}</span><span className="tabular-nums">{n}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="text-[11px] font-bold uppercase tracking-wider text-[#667085] pt-1">Último resultado de llamada</div>
+          <div className="flex flex-wrap gap-1.5">
+            {conteoResultados(baseResultados, esp).map(({ id, label, n }) => {
+              const on = resultadosSel.includes(id);
+              return (
+                <button key={id} onClick={() => alternar(resultadosSel, setResultadosSel, id)} disabled={n === 0 && !on}
+                  className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold ${on ? "border-[#7C3AED] bg-[#F5F3FF] text-[#5B21B6]" : n === 0 ? "border-[#F1F5F9] text-[#CBD5E1]" : "border-[#E2E8F0] text-[#334155]"}`}>{label} · {n}</button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {tab === "zonas" && (
+        <section className="bg-white rounded-2xl border border-[#E5E7EB] p-3 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-[#667085]">Ciudades</div>
+            {(ciudadesSel.length > 0 || zipsSel.length > 0) && <button onClick={() => { setCiudadesSel([]); setZipsSel([]); setVer(PAGINA); }} className="text-xs font-bold px-2.5 py-1.5 rounded-lg border border-[#E2E8F0]">Limpiar selección</button>}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+            {zonas.map((z) => {
+              const on = ciudadesSel.includes(z.clave);
+              return (
+                <button key={z.clave} onClick={() => { alternar(ciudadesSel, setCiudadesSel, z.clave); if (on) setZipsSel(zipsSel.filter((zz) => !z.zips.some((x) => x.zip === zz))); }}
+                  className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-[13px] font-bold ${on ? "border-[#2563EB] bg-[#EFF6FF] text-[#1E3A8A]" : "border-[#E2E8F0] text-[#111827] bg-white hover:border-[#93C5FD]"}`}>
+                  <span className="truncate">{z.nombre}</span><span className="tabular-nums">{z.n}</span>
+                </button>
+              );
+            })}
+            {zonas.length === 0 && <div className="text-sm text-[#94A3B8]">Sin ciudades en tu cartera.</div>}
+          </div>
+          {ciudadesSel.length > 0 && zonas.filter((z) => ciudadesSel.includes(z.clave)).map((z) => z.zips.length > 0 && (
+            <div key={"zz" + z.clave}>
+              <div className="text-[11px] font-bold uppercase tracking-wider text-[#667085] mb-1.5">ZIP de {z.nombre}</div>
+              <div className="flex flex-wrap gap-1.5">
+                {z.zips.map(({ zip, n }) => {
+                  const on = zipsSel.includes(zip);
+                  return <button key={zip} onClick={() => alternar(zipsSel, setZipsSel, zip)} className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold ${on ? "border-[#7C3AED] bg-[#F5F3FF] text-[#5B21B6]" : "border-[#E2E8F0] text-[#334155]"}`}>{zip} · {n}</button>;
+                })}
+              </div>
             </div>
           ))}
-        </div>
+        </section>
+      )}
+
+      {tab === "etapas" && (
+        <section className="bg-white rounded-2xl border border-[#E5E7EB] p-3">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-[#667085] mb-2">Etapa del candidato</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+            {ETAPAS.map((e) => {
+              const n = filtrarItems(items, filtros).filter((i) => (i.etapa || etapaDe(i.raw)) === e.id).length, on = etapasSel.includes(e.id);
+              return <button key={e.id} onClick={() => alternar(etapasSel, setEtapasSel, e.id)} disabled={n === 0 && !on}
+                className={`flex items-center justify-between px-3 py-2.5 rounded-xl border text-[13px] font-bold ${on ? "border-[#2563EB] bg-[#EFF6FF] text-[#1E3A8A]" : n === 0 ? "border-[#F1F5F9] text-[#CBD5E1]" : "border-[#E2E8F0] text-[#111827]"}`}>
+                <span>{e.label}</span><span className="tabular-nums">{n}</span></button>;
+            })}
+          </div>
+        </section>
+      )}
+
+      {selectorSinEleccion ? (
+        <div className="text-center py-6 text-sm text-[#94A3B8]">Elige {tab === "zonas" ? "una o más ciudades" : tab === "etapas" ? "una o más etapas" : "uno o más estados"} para ver sus clientes.</div>
       ) : (
         <div className="space-y-2">
+          {["estados", "zonas", "etapas"].includes(tab) && <div className="text-sm font-bold text-[#111827]">{filtrada.length} cliente{filtrada.length !== 1 ? "s" : ""} seleccionado{filtrada.length !== 1 ? "s" : ""}</div>}
           {filtrada.slice(0, ver).map((it) => <Tarjeta key={it.key} it={it} />)}
-          {filtrada.length === 0 && <div className="text-center py-10 text-sm text-[#94A3B8]">{tab === "prioridad" ? "Nada urgente por ahora. Revisa Nuevos o Seguimientos." : "No hay registros aquí."}</div>}
-          {filtrada.length > ver && <button onClick={() => setVer(ver + 40)} className="w-full py-3 rounded-xl text-sm font-bold border border-[#E2E8F0] bg-white">Ver más ({filtrada.length - ver})</button>}
+          {filtrada.length === 0 && <div className="text-center py-10 text-sm text-[#94A3B8]">{tab === "prioridad" && !hayFiltros ? "Nada urgente por ahora. Revisa Todos, Nuevos o Seguimientos." : "No hay registros con estos filtros."}</div>}
+          {filtrada.length > ver && <button onClick={() => setVer(ver + PAGINA)} className="w-full py-3 rounded-xl text-sm font-bold border border-[#E2E8F0] bg-white">Ver más ({filtrada.length - ver})</button>}
         </div>
       )}
 
