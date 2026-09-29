@@ -8,7 +8,7 @@
 //  • Nunca normaliza los datos comerciales: lo que llega es lo que se guarda.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { buildState, diffState, emptyDocs, Docs, Ctx, Op } from "./storeCore";
-import { queriesFor } from "./schema";
+import { queriesFor, SHARED_READ_KEYS_BY_ROLE } from "./schema";
 
 const STAFF = ["super_admin", "distribuidor", "supervisor"];
 const LOTE = 400;
@@ -33,6 +33,7 @@ async function commitOps(db: any, appId: string, ops: Op[]) {
       else if (op.kind === "delete") b.delete(ws.collection(op.col).doc(op.id));
       else if (op.kind === "shared") b.set(ws.collection("shared").doc(op.key), { payload: op.data, updatedAt: new Date().toISOString() });
       else if (op.kind === "userCallLog") b.set(ws.collection("userData").doc(op.uid), { callLog: op.callLog, updatedAt: new Date().toISOString() }, { merge: true });
+      else if (op.kind === "userField") b.set(ws.collection("userData").doc(op.uid), { [op.field]: op.data, updatedAt: new Date().toISOString() }, { merge: true });
     });
     await b.commit();
   }
@@ -58,8 +59,13 @@ export function useV2Store(user: User, getDB: () => Promise<any>, defaults: Reco
 
   const ctx = useCallback((): Ctx | null => user ? { uid: user.uid, role: user.role, appId: user.appId, nombre: user.nombre } : null, [user?.uid, user?.role, user?.appId, user?.nombre]);
 
+  // Usuario ACTUAL (no el del primer render): rebuild se memoriza, y al arrancar
+  // user todavía es null. Sin esta referencia, el estado se armaba sin uid/rol y
+  // las listas personales (rutas, notificaciones) no aparecían al cargar.
+  const userRef = useRef(user);
+  userRef.current = user;
   const rebuild = useCallback(() => {
-    const st = buildState(docsRef.current, defaults);
+    const st = buildState(docsRef.current, defaults, userRef.current?.uid, userRef.current?.role);
     committedRef.current = st;
     if (!timer.current && !flushing.current) { localRef.current = st; setLocal(st); }
   }, [defaults]);
@@ -91,7 +97,7 @@ export function useV2Store(user: User, getDB: () => Promise<any>, defaults: Reco
       flushing.current = false;
       if (reintentar) timer.current = setTimeout(flush, 5000);
       else if (baseRef.current && !timer.current) timer.current = setTimeout(flush, ESPERA_MS);
-      if (!timer.current) { const st = buildState(docsRef.current, defaults); committedRef.current = st; localRef.current = st; setLocal(st); }
+      if (!timer.current) { const st = buildState(docsRef.current, defaults, userRef.current?.uid, userRef.current?.role); committedRef.current = st; localRef.current = st; setLocal(st); }
     }
   }, [ctx, rebuild]);
 
@@ -157,14 +163,30 @@ export function useV2Store(user: User, getDB: () => Promise<any>, defaults: Reco
       });
       aplicar("records", queriesFor(user, "records"));
       aplicar("appts", queriesFor(user, "appts"));
-      // shared: config de la app
-      pendientes.add("shared");
-      unsubs.push(ws.collection("shared").onSnapshot((snap: any) => {
-        const sh: Record<string, any> = {};
-        snap.forEach((d: any) => { sh[d.id] = d.data()?.payload; });
-        docsRef.current = { ...docsRef.current, shared: sh };
-        marcar("shared", snap.metadata?.fromCache); rebuild();
-      }, onErr("shared")));
+      // shared: config de la app.
+      //  • Staff: toda la colección.
+      //  • Telemarketing: SOLO los documentos de SHARED_READ_KEYS_BY_ROLE, uno por uno
+      //    (nunca descarga rutas/cumpleaños del equipo ni nada que su rol no use).
+      if (STAFF.includes(user.role)) {
+        pendientes.add("shared");
+        unsubs.push(ws.collection("shared").onSnapshot((snap: any) => {
+          const sh: Record<string, any> = {};
+          snap.forEach((d: any) => { sh[d.id] = d.data()?.payload; });
+          docsRef.current = { ...docsRef.current, shared: sh };
+          marcar("shared", snap.metadata?.fromCache); rebuild();
+        }, onErr("shared")));
+      } else {
+        const propios: Record<string, any> = {};
+        (SHARED_READ_KEYS_BY_ROLE[user.role] || []).forEach((clave) => {
+          const key = "shared:" + clave;
+          pendientes.add(key);
+          unsubs.push(ws.collection("shared").doc(clave).onSnapshot((d: any) => {
+            if (d.exists) propios[clave] = d.data()?.payload; else delete propios[clave];
+            docsRef.current = { ...docsRef.current, shared: { ...propios } };
+            marcar(key, d.metadata?.fromCache); rebuild();
+          }, onErr(key)));
+        });
+      }
       // userData: staff ve el de todos (conteos del equipo); cada quien, el suyo
       pendientes.add("userData");
       const setUD = (m: Record<string, any>, fromCache: boolean) => { docsRef.current = { ...docsRef.current, userData: m }; marcar("userData", fromCache); rebuild(); };

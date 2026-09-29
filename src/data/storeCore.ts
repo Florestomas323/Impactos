@@ -10,26 +10,15 @@
 //    tal cual (texto, mapa o array), como se encontró en el dry-run.
 //  • Los campos del motor (asignación, origen) jamás los escribe la app normal:
 //    se toman SIEMPRE del documento actual. Solo el escritor de asignaciones los cambia.
-import { ENGINE_FIELDS, SECTION_ASSIGNMENT, Section, COBRANZA_SHARED_DOC, CALLLOG_KEY, isSharedKey, docIdFor, completarContactoCobranza } from "./schema";
+import { ENGINE_FIELDS, SECTION_ASSIGNMENT, Section, COBRANZA_SHARED_DOC, CALLLOG_KEY, isSharedKey, docIdFor, completarContactoCobranza, USER_KEYS, puedeEscribirShared, CLAVES_PERSONALES_TM, esStaffShared } from "./schema";
 import { asList } from "../services/assignments";
 
 export const LIST_KEYS: Section[] = ["agregados", "referidos", "prospectos", "distribucion", "reclutamiento"];
 const STAFF = ["super_admin", "distribuidor", "supervisor"];
 
 // Claves compartidas que también escribe alguien que no es staff (mismo mapa en firestore.rules).
-const TODOS_TM = ["telemarketing_ventas", "telemarketing_cobranza", "telemarketing_reclutamiento"];
-export const SHARED_WRITERS: Record<string, string[]> = {
-  // Las escribe cualquiera del equipo desde funciones que ya existen en la app:
-  cofreAperturas: TODOS_TM,      // abrir cofres de incentivo
-  notificaciones: TODOS_TM,      // avisos del equipo y "leído por"
-  cumpleNotifs: TODOS_TM,        // evita repetir el aviso de cumpleaños
-  socios: ["telemarketing_reclutamiento"],
-  docsSocios: ["telemarketing_reclutamiento"],
-  [COBRANZA_SHARED_DOC]: ["telemarketing_cobranza"],
-};
-export function canWriteShared(role: string, key: string): boolean {
-  return STAFF.includes(role) || (SHARED_WRITERS[key] || []).includes(role);
-}
+// Quién escribe cada shared/{clave}: definido UNA vez en src/data/schema.ts.
+export const canWriteShared = (role: string, key: string): boolean => puedeEscribirShared(role, key);
 
 export type Ctx = { uid: string; role: string; appId: string; nombre: string; nowISO?: string };
 export type Docs = {
@@ -55,8 +44,15 @@ export function mergeCallLogs(...logs: any[]): Record<string, Record<string, num
 }
 
 // ── Documentos → estado ─────────────────────────────────────────────────────
-export function buildState(d: Docs, base: Record<string, any> = {}): Record<string, any> {
+export function buildState(d: Docs, base: Record<string, any> = {}, uid?: string, role?: string): Record<string, any> {
   const st: Record<string, any> = { ...base };
+  // Listas propias: SOLO las de quien usa la app (nunca las de otra persona).
+  Object.entries(USER_KEYS).forEach(([clave, campo]) => { st[clave] = (uid && d.userData[uid]?.[campo]) || []; });
+  // Rutas del equipo (solo lectura): las rutas personales de las demás personas.
+  // Solo el staff recibe el userData de otros (Rules), así que a un telemarketing
+  // esto le llega vacío por construcción.
+  st.rutasEquipo = Object.entries(d.userData || {}).filter(([u]) => u !== uid)
+    .flatMap(([u, ud]: any) => asList(ud?.rutas).filter(Boolean).map((r: any) => ({ ...r, _deUid: u })));
   LIST_KEYS.forEach((k) => { st[k] = []; });
   const clientesData: Record<string, any> = {};
   Object.values(d.records).forEach((doc: any) => {
@@ -74,6 +70,10 @@ export function buildState(d: Docs, base: Record<string, any> = {}): Record<stri
   Object.entries(d.shared).forEach(([k, v]) => { if (k !== COBRANZA_SHARED_DOC && k !== CALLLOG_KEY && isSharedKey(k)) st[k] = v; });
   st.cobranza = { ...(d.shared[COBRANZA_SHARED_DOC] || {}), clientesData };
   st.callLog = mergeCallLogs(d.shared[CALLLOG_KEY], ...Object.values(d.userData).map((u: any) => u?.callLog));
+  // Telemarketing: notificaciones y avisos de cumpleaños PROPIOS (userData), nunca los globales.
+  if (role && !esStaffShared(role)) {
+    Object.entries(CLAVES_PERSONALES_TM).forEach(([k, vacio]) => { st[k] = (uid && d.userData[uid]?.[k]) ?? vacio(); });
+  }
   return st;
 }
 
@@ -108,7 +108,8 @@ export type Op =
   | { kind: "set"; col: "records" | "appts"; id: string; data: any }
   | { kind: "delete"; col: "records" | "appts"; id: string }
   | { kind: "shared"; key: string; data: any }
-  | { kind: "userCallLog"; uid: string; callLog: any };
+  | { kind: "userCallLog"; uid: string; callLog: any }
+  | { kind: "userField"; uid: string; field: string; data: any };
 export type DiffResult = { ops: Op[]; blocked: string[] };
 
 const same = (a: any, b: any) => a === b || JSON.stringify(a) === JSON.stringify(b);
@@ -228,9 +229,22 @@ export function diffState(prev: any, next: any, d: Docs, ctx: Ctx): DiffResult {
     if (cambio) ops.push({ kind: "userCallLog", uid: ctx.uid, callLog: mine });
   }
 
+  // Listas propias (rutas / cumpleaños del telemarketing): a SU userData.
+  Object.entries(USER_KEYS).forEach(([clave, campo]) => {
+    if (prev?.[clave] === next?.[clave] || same(prev?.[clave], next?.[clave])) return;
+    ops.push({ kind: "userField", uid: ctx.uid, field: campo, data: clean(next?.[clave] ?? []) });
+  });
+
+  // Telemarketing: sus notificaciones/avisos van a SU userData (nunca a shared/).
+  const personales = !esStaffShared(ctx.role) ? Object.keys(CLAVES_PERSONALES_TM) : [];
+  personales.forEach((k) => {
+    if (prev?.[k] === next?.[k] || same(prev?.[k], next?.[k])) return;
+    ops.push({ kind: "userField", uid: ctx.uid, field: k, data: clean(next?.[k] ?? CLAVES_PERSONALES_TM[k]()) });
+  });
+
   // Resto de claves compartidas
   new Set([...Object.keys(prev || {}), ...Object.keys(next || {})]).forEach((k) => {
-    if (!isSharedKey(k) || k === CALLLOG_KEY || k === COBRANZA_SHARED_DOC) return;
+    if (!isSharedKey(k) || k === CALLLOG_KEY || k === COBRANZA_SHARED_DOC || personales.includes(k)) return;
     if (prev?.[k] === next?.[k] || same(prev?.[k], next?.[k])) return;
     if (canWriteShared(ctx.role, k)) ops.push({ kind: "shared", key: k, data: clean(next?.[k]) });
     else blocked.push(k);

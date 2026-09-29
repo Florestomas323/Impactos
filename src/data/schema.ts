@@ -66,9 +66,47 @@ export const LOCAL_ONLY_KEYS = ["respaldos"];
 export const RECORD_KEYS = ["agregados", "referidos", "prospectos", "distribucion", "reclutamiento", "appts", "cobranza"];
 
 // ¿Esta clave del estado va a workspaces/{appId}/shared/{clave}?
+// Listas PROPIAS de cada persona (v2): viven en userData/{uid}, no en shared/.
+// Las usa el telemarketing para Rutas y Cumpleaños, así nunca ve ni pisa las
+// listas globales del equipo (que traen clientes de otros).
+export const USER_KEYS: Record<string, string> = { misRutas: "rutas", misCumpleanos: "cumpleanos" };
+// Claves que el store CALCULA (no se guardan en ningún documento).
+export const DERIVED_KEYS = ["rutasEquipo"];
 export function isSharedKey(k: string): boolean {
-  return !!k && !k.startsWith("_") && !RECORD_KEYS.includes(k) && !LEGACY_AUTH_KEYS.includes(k) && !LOCAL_ONLY_KEYS.includes(k);
+  return !!k && !k.startsWith("_") && !RECORD_KEYS.includes(k) && !LEGACY_AUTH_KEYS.includes(k) && !LOCAL_ONLY_KEYS.includes(k) && !(k in USER_KEYS) && !DERIVED_KEYS.includes(k);
 }
+
+// ── Documentos shared/{clave} por rol: FUENTE ÚNICA ─────────────────────────
+// Staff (super_admin, distribuidor, supervisor) lee y escribe todo shared/.
+// Cada telemarketing lee SOLO lo que su operación usa y que NO trae clientes ajenos:
+//   ventas    → catalogoCustom (Catálogo/Simulador), cumpleMsgTpl (plantilla de Cumpleaños),
+//               callLog (conteo de llamadas por agente del Centro de mando; sin datos de clientes)
+//   cobranza  → cobranza (configuración del módulo)
+//   reclutam. → socios, docsSocios
+// NUNCA: rutas, cumpleanos (listas del equipo con clientes de otros), notificaciones y
+// cumpleNotifs (textos y claves con nombres/teléfonos de clientes de todo el equipo),
+// incentivos*, cofre*, controlCierres. firestore.rules replica EXACTAMENTE estas listas
+// (tests/rutasCumple.test.ts verifica que coincidan).
+export const STAFF_ROLES_SHARED = ["super_admin", "distribuidor", "supervisor"];
+export const SHARED_READ_KEYS_BY_ROLE: Record<string, string[]> = {
+  telemarketing_ventas: ["catalogoCustom", "cumpleMsgTpl", "callLog"],
+  telemarketing_cobranza: ["cobranza"],
+  telemarketing_reclutamiento: ["socios", "docsSocios"],
+};
+// Lo que cada telemarketing puede ESCRIBIR (siempre un subconjunto de lo que lee).
+export const SHARED_WRITE_KEYS_BY_ROLE: Record<string, string[]> = {
+  telemarketing_ventas: [],
+  telemarketing_cobranza: ["cobranza"],
+  telemarketing_reclutamiento: ["socios", "docsSocios"],
+};
+// Para telemarketing, estas claves del estado son PERSONALES: viven en su
+// userData/{uid} (mismo nombre de campo) y la app las usa igual que siempre
+// (state.notificaciones, state.cumpleNotifs). El staff conserva las de shared/.
+export const CLAVES_PERSONALES_TM: Record<string, () => any> = { notificaciones: () => [], cumpleNotifs: () => ({}) };
+export const esStaffShared = (role?: string) => STAFF_ROLES_SHARED.includes(String(role || ""));
+export const puedeLeerShared = (role: string, key: string) => STAFF_ROLES_SHARED.includes(role) || (SHARED_READ_KEYS_BY_ROLE[role] || []).includes(key);
+export const puedeEscribirShared = (role: string, key: string) =>
+  key !== CALLLOG_KEY && (STAFF_ROLES_SHARED.includes(role) || (SHARED_WRITE_KEYS_BY_ROLE[role] || []).includes(key));
 // Cobranza: la config (umbrales, meses, reportes…) va a shared/cobranza;
 // cada cliente de clientesData es un registro (section "cobranza").
 export const COBRANZA_SHARED_DOC = "cobranza";
