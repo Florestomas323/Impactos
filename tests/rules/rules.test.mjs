@@ -124,7 +124,7 @@ test("Config compartida: staff escribe; telemarketing solo lo suyo; callLog hist
   const S = (uid, k) => db(uid).collection("workspaces").doc(A).collection("shared").doc(k);
   await assertSucceeds(S("mila", "incentivos").set({ payload: [1] }));
   await assertFails(S("yeli", "incentivos").set({ payload: [] }));
-  await assertSucceeds(S("yeli", "notificaciones").set({ payload: [] }));
+  await assertFails(S("yeli", "notificaciones").set({ payload: [] }));             // v2: las del telemarketing son personales (userData)
   await assertSucceeds(S("pedro", "socios").set({ payload: [] }));
   await assertFails(S("yeli", "socios").set({ payload: [] }));
   await assertSucceeds(S("jova", "cobranza").set({ payload: {} }));
@@ -136,4 +136,46 @@ test("Config compartida: staff escribe; telemarketing solo lo suyo; callLog hist
 test("crm_telemarketing no se puede escribir, ni siquiera el Súper Admin", async () => {
   await assertFails(db("tomas").collection("crm_telemarketing").doc("sec_misc").set({ x: 1 }));
   await assertFails(db("yeli").collection("crm_telemarketing").doc("sec_misc").get());
+});
+
+// ════════ shared por rol + userData aislado (Rutas/Cumpleaños v2) ════════
+const sembrarListas = async () => env.withSecurityRulesDisabled(async (c) => {
+  const ws = c.firestore().collection("workspaces").doc(A);
+  for (const k of ["rutas", "cumpleanos", "notificaciones", "cumpleNotifs", "catalogoCustom", "cumpleMsgTpl", "callLog", "cobranza", "socios", "docsSocios", "incentivos", "cofreConfig"])
+    await ws.collection("shared").doc(k).set({ payload: [] });
+  for (const u of ["yeli", "lis", "jova", "pedro"]) await ws.collection("userData").doc(u).set({ rutas: [{ id: "R-" + u }], cumpleanos: [] });
+});
+const SH = (uid, k) => db(uid).collection("workspaces").doc(A).collection("shared").doc(k);
+const UD = (uid, who) => db(uid).collection("workspaces").doc(A).collection("userData").doc(who);
+
+for (const [tlk, otro, propios] of [
+  ["yeli", "lis", ["catalogoCustom", "cumpleMsgTpl", "callLog"]],
+  ["jova", "yeli", ["cobranza"]],
+  ["pedro", "jova", ["socios", "docsSocios"]],
+]) {
+  test(`${tlk} (${U[tlk].role}): rutas, cumpleanos, notificaciones y cumpleNotifs globales DENEGADOS; su userData sí, el de otro no`, async () => {
+    await sembrarListas();
+    for (const k of ["rutas", "cumpleanos", "notificaciones", "cumpleNotifs"]) {
+      await assertFails(SH(tlk, k).get());
+      await assertFails(SH(tlk, k).set({ payload: [] }));
+    }
+    await assertFails(db(tlk).collection("workspaces").doc(A).collection("shared").get());   // tampoco la colección entera
+    for (const k of propios) await assertSucceeds(SH(tlk, k).get());                       // lo que su operación usa
+    for (const k of ["incentivos", "cofreConfig"]) await assertFails(SH(tlk, k).get());
+    await assertSucceeds(UD(tlk, tlk).get());
+    await assertSucceeds(UD(tlk, tlk).set({ rutas: [{ id: "R-nueva", createdByUid: tlk, paradas: [{ id: "a1", section: "agregados" }] }], notificaciones: [], cumpleNotifs: {} }, { merge: true }));
+    await assertFails(UD(tlk, otro).get());
+    await assertFails(UD(tlk, otro).set({ rutas: [] }, { merge: true }));
+    await assertFails(db(tlk).collection("workspaces").doc(A).collection("userData").get()); // no puede listar el del equipo
+    await assertFails(SH(tlk, "rutas").set({ payload: [] }));                                // ni escribir la lista del equipo
+  });
+}
+test("Staff: lee shared/rutas, shared/cumpleanos, notificaciones, cumpleNotifs y el userData del equipo", async () => {
+  await sembrarListas();
+  for (const s of ["angie", "mila", "tomas"]) {
+    for (const k of ["rutas", "cumpleanos", "notificaciones", "cumpleNotifs"]) await assertSucceeds(SH(s, k).get());
+    await assertSucceeds(UD(s, "yeli").get());
+    await assertSucceeds(db(s).collection("workspaces").doc(A).collection("userData").get());
+  }
+  await assertFails(UD("angie", "yeli").set({ rutas: [] }, { merge: true }));              // Rutas del equipo: solo lectura
 });
