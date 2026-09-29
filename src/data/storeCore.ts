@@ -90,18 +90,42 @@ export function apptDoc(a: any, cur: any, ctx: Ctx): any {
   if (!cur) {
     out.createdByUid = ctx.uid;
     out.createdByName = ctx.nombre;
+    // Reprogramada EN la visita: el staff crea la cita nueva conservando a quien consiguió la cita.
+    if (a.createdFrom === "reprogramada_visita" && STAFF.includes(ctx.role) && a.createdByUid) {
+      out.createdByUid = a.createdByUid; out.createdByName = a.createdByName ?? "";
+    }
     out.assignedTo = a.assignedTo ?? null;
+    // Telemarketing: la cita nace limpia y SIN asignar (mismo criterio que firestore.rules tmCreaOk).
+    if (!STAFF.includes(ctx.role)) {
+      out.assignedTo = null;
+      APPT_NO_INICIALES_TM.forEach((k) => { delete out[k]; });
+      if (out.status === "cancelada") delete out.status;
+      if (out.resultado) delete out.resultado;
+    }
   } else {
     delete out.createdByUid; delete out.createdByName;
     if (cur.createdByUid !== undefined) out.createdByUid = cur.createdByUid;
     if (cur.createdByName !== undefined) out.createdByName = cur.createdByName;
     out.assignedTo = cur.assignedTo ?? null;
+    // El telemarketing no escribe campos de resultado (quien agenda no es quien visita).
+    if (!STAFF.includes(ctx.role)) {   // mismo criterio que firestore.rules (appts)
+      ["resultado", "resultado_detalle", "monto", "producto", "cartucho_meses", "resultByUid", "resultByName", "resultAt",
+       ...APPT_FIJOS_TM, "eliminado"].forEach((k) => { delete out[k]; if (cur[k] !== undefined) out[k] = cur[k]; });
+    }
     // El registro de origen tampoco cambia al editar (ni se inventa en citas viejas).
     ["sourceRecordId", "sourceSection", "sourceRefIndex"].forEach((k) => { delete out[k]; if (cur[k] !== undefined) out[k] = cur[k]; });
   }
-  out.eliminado = a.eliminado === true;
+  if (!cur || STAFF.includes(ctx.role)) out.eliminado = a.eliminado === true;   // TLK: conserva lo guardado
   return out;
 }
+// Campos que una cita NUEVA de telemarketing no puede traer (firestore.rules camposNoIniciales).
+export const APPT_NO_INICIALES_TM = ["resultado_detalle", "monto", "cartucho_meses", "resultByUid", "resultByName", "resultAt",
+  "cancelledAt", "cancelledByUid", "cancelledByName", "cancelReason", "reprogramHistory", "reprogrammedFromApptId", "createdFrom",
+  "servicioResultado", "servicioHistorial", "_sincronizado", "_clienteId", "_clienteGrupo"];
+// Campos técnicos/de staff que el telemarketing nunca cambia en una cita existente (las Rules
+// usan allowlist; esto evita que la app intente una escritura que Firestore rechazaría).
+export const APPT_FIJOS_TM = ["tipo", "_type", "servicioResultado", "servicioHistorial", "actualizado",
+  "_sincronizado", "_clienteId", "_clienteGrupo", "createdFrom", "reprogrammedFromApptId"];
 
 // ── Estado → operaciones de escritura ───────────────────────────────────────
 export type Op =
@@ -205,6 +229,9 @@ export function diffState(prev: any, next: any, d: Docs, ctx: Ctx): DiffResult {
       if (!a || a.id == null) return;
       const id = String(a.id), old = P.get(id);
       if (old === a || (old && same(old, a))) return;
+      // Cita cancelada o con resultado físico: solo lectura para el telemarketing (firestore.rules tmActualizaOk).
+      if (!STAFF.includes(ctx.role) && d.appts[id]?.status === "cancelada") { blocked.push(`cita ${id} (cancelada: solo lectura)`); return; }
+      if (!STAFF.includes(ctx.role) && d.appts[id] && String(d.appts[id].resultado ?? "") !== "") { blocked.push(`cita ${id} (con resultado: solo lectura)`); return; }
       ops.push({ kind: "set", col: "appts", id, data: apptDoc(a, d.appts[id], ctx) });
     });
     P.forEach((_, id) => {
