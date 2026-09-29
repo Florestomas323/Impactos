@@ -19,6 +19,8 @@ import { CommandCenterV2 } from "./components/dashboard/CommandCenterV2";
 import { TIPOS_AGENDA_POR_ROL, PERIODO_LABEL, periodoSoportado } from "./services/commandCenter";
 import { enrichNewAppts, trazaRegistro } from "./services/apptTrace";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
+import { RutasEquipoV2 } from "./components/rutas/RutasEquipoV2";
+import { rutaPersonalV2, resolverRutaPersonal } from "./services/rutasV2";
 import { especialidadDe } from "./services/callWorkflow";
 import { BRAND } from "./theme";
 import { asList } from "./services/assignments";
@@ -7613,12 +7615,18 @@ const ESTADO_RUTA={
   completada:{ico:"✅", label:"Completada",bg:"#e7f6ec",color:"#047857"},
 };
 
-function RutasSection({ rutas, setRutas, allData, agentes, agente, notify }) {
+// autorV2 (solo v2, telemarketing): la ruta es personal y se firma por uid; sin selector de agente.
+function RutasSection({ rutas, setRutas, allData, agentes, agente, notify, autorV2=null }) {
   const [showCrear,setShowCrear]=useState(false);
   const candidatos = recolectarParaRutas(allData);
 
   const guardarRuta=(ruta)=>{
-    const nueva={...ruta, id:genId(), creado:new Date().toISOString(), estadoRuta:"pendiente"};
+    let nueva={...ruta, id:genId(), creado:new Date().toISOString(), estadoRuta:"pendiente"};
+    if(autorV2){
+      // Ruta personal v2: SOLO referencias {id, section} + metadatos. Sin copias de clientes
+      // (si un cliente se reasigna, no queda su nombre/teléfono/dirección en la ruta vieja).
+      nueva = rutaPersonalV2(ruta, autorV2, nueva.id, nueva.creado);
+    }
     setRutas(p=>[nueva,...p]);
     setShowCrear(false);
     if(notify) notify("datos", `🗺️ Nueva ruta: ${ruta.nombreRuta}`, `${ruta.clientes.length+ruta.referidos.length} paradas · ${ruta.ciudad||ruta.codigoPostal||"mixta"}`, "🗺️ Rutas");
@@ -7641,7 +7649,7 @@ function RutasSection({ rutas, setRutas, allData, agentes, agente, notify }) {
         </div>
       ) : (
         <div className="space-y-3">
-          {rutas.map(ruta=>{
+          {(autorV2 ? rutas.map(r=>resolverRutaPersonal(r, candidatos)) : rutas).map(ruta=>{
             const er=ESTADO_RUTA[ruta.estadoRuta]||ESTADO_RUTA.pendiente;
             const paradas=[...(ruta.clientes||[]),...(ruta.referidos||[])];
             const conDir=paradas.filter(p=>dirSuficiente(p));
@@ -7653,6 +7661,7 @@ function RutasSection({ rutas, setRutas, allData, agentes, agente, notify }) {
                     <div className="font-black text-[#1f2d3d] text-sm">{ruta.nombreRuta}</div>
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{background:er.bg,color:er.color}}>{er.label}</span>
                   </div>
+                  {ruta._faltantes>0 && <div className="text-[11px] font-bold text-amber-700 mt-1">{ruta._faltantes} parada{ruta._faltantes!==1?"s":""} ya no {ruta._faltantes!==1?"están asignadas":"está asignada"} a ti.</div>}
                   <div className="text-[11px] text-slate-400 mt-0.5">
                     {ruta.fechaRuta?`📅 ${ruta.fechaRuta} · `:""}{ruta.ciudad?`🏙️ ${ruta.ciudad} · `:""}{ruta.codigoPostal?`📮 ${ruta.codigoPostal} · `:""}{paradas.length} parada(s){ruta.agenteAsignado?` · 👤 ${ruta.agenteAsignado}`:""}
                   </div>
@@ -7693,13 +7702,15 @@ function RutasSection({ rutas, setRutas, allData, agentes, agente, notify }) {
         </div>
       )}
 
-      {showCrear && <RutaCrear candidatos={candidatos} agentes={agentes} agente={agente} onSave={guardarRuta} onClose={()=>setShowCrear(false)} />}
+      {showCrear && <RutaCrear candidatos={candidatos} agentes={agentes} agente={agente} onSave={guardarRuta} onClose={()=>setShowCrear(false)} sinAgente={!!autorV2} />}
     </div>
   );
 }
 
 // Modal para crear una ruta (manual, por ciudad o por ZIP)
-function RutaCrear({ candidatos, agentes, agente, onSave, onClose }) {
+// sinAgente (solo v2, telemarketing): no se muestra el selector de la lista vieja de agentes,
+// porque no asigna la ruta a ningún usuario real. La ruta queda firmada por quien la crea.
+function RutaCrear({ candidatos, agentes, agente, onSave, onClose, sinAgente=false }) {
   const [modo,setModo]=useState("manual");  // manual | ciudad | zip
   const [nombreRuta,setNombreRuta]=useState("");
   const [fechaRuta,setFechaRuta]=useState(hoyLocal());
@@ -7750,7 +7761,7 @@ function RutaCrear({ candidatos, agentes, agente, onSave, onClose }) {
         <Field label="Nombre de la ruta"><input value={nombreRuta} onChange={e=>setNombreRuta(e.target.value)} className="w-full border-2 border-[#e5def4] rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-[#7c3aed]" placeholder="Ej: Visitas Temple lunes" /></Field>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Fecha"><input type="date" value={fechaRuta} onChange={e=>setFechaRuta(e.target.value)} className="w-full border-2 border-[#e5def4] rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-[#7c3aed]" /></Field>
-          <Field label="Agente"><select value={agenteAsignado} onChange={e=>setAgenteAsignado(e.target.value)} className="w-full border-2 border-[#e5def4] rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-[#7c3aed]">{(agentes||[]).map(a=><option key={a} value={a}>{a}</option>)}</select></Field>
+{!sinAgente && <Field label="Agente"><select value={agenteAsignado} onChange={e=>setAgenteAsignado(e.target.value)} className="w-full border-2 border-[#e5def4] rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-[#7c3aed]">{(agentes||[]).map(a=><option key={a} value={a}>{a}</option>)}</select></Field>}
         </div>
         <Field label="¿Cómo armar la ruta?">
           <div className="grid grid-cols-3 gap-1.5">
@@ -8957,12 +8968,21 @@ function AppRoot() {
             {tab==="cobranza" && <CobranzaSection distribucion={(state.distribucion||[]).filter(c=>!c.eliminado)} cobranza={state.cobranza||{}} setCobranza={(fn)=>setSection("cobranza",fn)} />}
             {tab==="catalogo" && <BuscadorCodigos catalogoCustom={state.catalogoCustom||{}} setCatalogoCustom={(fn)=>setState(st=>({...st,catalogoCustom:typeof fn==="function"?fn(st.catalogoCustom||{}):fn}))} puedeEditar={canDo("catalogo.edit")} />}
             {tab==="simulador" && <SimuladorCompra />}
-            {tab==="rutas" && <RutasSection rutas={state.rutas||[]} setRutas={(fn)=>setState(s=>({...s,rutas:typeof fn==="function"?fn(s.rutas||[]):fn}))} allData={allData} agentes={AGENTES} agente={agenteActivo} notify={notify} />}
+            {tab==="rutas" && (ACCESS_V2 && v2User && especialidadDe(v2User.role)
+              // v2 telemarketing: SUS rutas (userData) sobre SUS registros asignados (allData ya viene acotado)
+              ? <RutasSection rutas={state.misRutas||[]} setRutas={(fn)=>setState(s=>({...s,misRutas:typeof fn==="function"?fn(s.misRutas||[]):fn}))} allData={allData} agentes={AGENTES} agente={agenteActivo} notify={notify} autorV2={{uid:v2User.uid, nombre:v2User.nombre}} />
+              : <>
+                  <RutasSection rutas={state.rutas||[]} setRutas={(fn)=>setState(s=>({...s,rutas:typeof fn==="function"?fn(s.rutas||[]):fn}))} allData={allData} agentes={AGENTES} agente={agenteActivo} notify={notify} />
+                  {ACCESS_V2 && v2User && <RutasEquipoV2 rutas={state.rutasEquipo||[]} estados={ESTADO_RUTA} />}
+                </>)}
             {tab==="servicio" && <ServicioSection key={ACCESS_V2?(navIntent?.key||"servicio"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} notify={notify} allData={allData}
               init={ACCESS_V2 && navIntent?.tab==="servicio" ? navIntent : null} />}
             {tab==="control" && <ControlActividad allData={allData} appts={state.appts||[]} reclutamiento={state.reclutamiento||[]} cierres={state.controlCierres||[]} onGuardarCierre={(c)=>setSection("controlCierres",p=>[c,...(p||[])])} />}
             {tab==="stats" && <Stats data={allData} callLog={state.callLog} appts={state.appts||[]} init={ACCESS_V2 && navIntent?.tab==="stats" ? navIntent : null} />}
-            {tab==="cumpleanos" && <CumpleSection cumpleanos={state.cumpleanos||[]} setCumple={(fn)=>setState(s=>({...s,cumpleanos:typeof fn==="function"?fn(s.cumpleanos||[]):fn}))} allData={allData} agente={agenteActivo} notify={notify} puedeImportar={true} />}
+            {tab==="cumpleanos" && (ACCESS_V2 && v2User && especialidadDe(v2User.role)
+              // v2 telemarketing: cumpleaños de SUS registros + los que él mismo agregue (userData); nunca la lista global
+              ? <CumpleSection cumpleanos={state.misCumpleanos||[]} setCumple={(fn)=>setState(s=>({...s,misCumpleanos:typeof fn==="function"?fn(s.misCumpleanos||[]):fn}))} allData={allData} agente={agenteActivo} notify={notify} puedeImportar={false} />
+              : <CumpleSection cumpleanos={state.cumpleanos||[]} setCumple={(fn)=>setState(s=>({...s,cumpleanos:typeof fn==="function"?fn(s.cumpleanos||[]):fn}))} allData={allData} agente={agenteActivo} notify={notify} puedeImportar={true} />)}
             {tab==="incentivo" && (puedeGestionarIncentivos
               ? <IncentivosHub incentivos={state.incentivos||[]} setIncentivos={(fn)=>setState(s=>({...s,incentivos:typeof fn==="function"?fn(s.incentivos||[]):fn}))} allData={allData} agentes={AGENTES} notify={notify} rolActivo={rolUsuario} agenteActivo={agenteActivo} cofreConfig={state.cofreConfig} setCofreConfig={setCofreConfig} incentivosCobranza={state.incentivosCobranza||[]} setIncentivosCobranza={(fn)=>setState(s=>({...s,incentivosCobranza:typeof fn==="function"?fn(s.incentivosCobranza||[]):fn}))} incentivosReclut={state.incentivosReclut||[]} setIncentivosReclut={(fn)=>setState(s=>({...s,incentivosReclut:typeof fn==="function"?fn(s.incentivosReclut||[]):fn}))} cobranza={state.cobranza||{}} socios={state.socios||[]} reclutamiento={state.reclutamiento||[]} />
               : <div className="bg-white rounded-2xl p-8 text-center shadow-sm border border-[#e8edf3]"><div className="mb-2 flex justify-center"><Ico e="🔒" size={36} strokeWidth={1.25} className="opacity-40" /></div><div className="text-sm text-slate-500 font-bold">Solo el administrador o distribuidor encargado puede gestionar incentivos.</div><div className="text-xs text-slate-400 mt-1">Tu progreso aparece en tu pantalla de Inicio.</div></div>
