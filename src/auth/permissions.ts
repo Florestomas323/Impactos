@@ -35,6 +35,7 @@ export const PERMISSIONS: Record<Role, string[]> = {
   telemarketing_ventas: [
     "dashboard.view", "llamadas.use", "clientes.assigned.view", "clientes.assigned.edit",
     "agenda.manage", "notas.create", "catalogo.view", "config.view",
+    "rutas.manage", "cumpleanos.manage",   // sobre SUS registros asignados (ver App.tsx: listas propias en v2)
   ],
 
   telemarketing_cobranza: [
