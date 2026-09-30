@@ -9,7 +9,9 @@ import {
   mapsLink, detallesEvento, icsEvento, sourceRecordForAppt, trazarCambiosAppts, candidatosCartera, buscarEnCartera,
   RESULTADOS_CITA_V2, ETIQUETA_RESULTADO, citaDesdeLlamada, revisarDuplicado,
   tieneResultado, citaSoloLectura, accionesCitaV2,
+  PALETA_TIPOS, colorTipo, tipoOficial, colorBordeCita, COLOR_CANCELADA, TIPOS_OFICIALES,
 } from "../src/services/agendaV2";
+import { buildState } from "../src/data/storeCore";
 import { SECTIONS_FOR_ROLE, docIdFor } from "../src/data/schema";
 import fs from "node:fs";
 import { TIPOS_AGENDA_POR_ROL } from "../src/services/commandCenter";
@@ -436,4 +438,111 @@ test("r3 · 7-10: el mapa de especialidades y la ruta del registro de origen en 
   assert.equal(typeof trazaRegistro({ section: "agregados", id: 17 } as any).sourceRecordId, "string");
   assert.equal(typeof trazaRegistro({ section: "referidos", recId: 5 as any, refIdx: 1 }).sourceRecordId, "string");
   assert.equal(typeof candidatosCartera({ agregados: [{ id: 17, nombre: "x" }] })[0].recId, "string");
+});
+
+// ════════ Agenda r5: paleta oficial de tipos · cancelada visible en "Todas" ════════
+test("r5 · 1-7: paleta oficial (cita verde · servicio rojo · entrevista morado · cocinada amarillo · recordatorio naranja · personal azul)", () => {
+  assert.equal(colorTipo("cita"), "#16a34a");
+  assert.equal(colorTipo("servicio"), "#dc2626");
+  assert.equal(colorTipo("entrevista"), "#7c3aed");
+  assert.equal(colorTipo("cocinada"), "#eab308");
+  assert.equal(colorTipo("llamada"), "#ea580c");
+  assert.equal(colorTipo("personal"), "#2563eb");
+  assert.equal(colorTipo("recordatorio"), "#ea580c");                 // legacy → mismo naranja
+  assert.equal(tipoOficial("recordatorio"), "llamada");
+  // Google Calendar: 10 Basil · 11 Tomato · 3 Grape · 5 Banana · 6 Tangerine · 9 Blueberry
+  assert.deepEqual(Object.fromEntries(TIPOS_OFICIALES.map((t) => [t, PALETA_TIPOS[t].colorId])), { cita: "10", servicio: "11", entrevista: "3", cocinada: "5", llamada: "6", personal: "9" });
+  // estados / acciones / resultados NO son categorías de color
+  for (const t of ["reset", "seguimiento", "pendiente", "reprogramada_visita", "cancelada"]) assert.equal(colorTipo(t), null, t);
+  // la misma cita, en borde y punto: verde; cancelada: gris (sigue siendo "cita")
+  assert.equal(colorBordeCita(cita()), "#16a34a");
+  const c = cancelarCita(cita(), LIAM, NOCHE, "x");
+  assert.equal(colorBordeCita(c), COLOR_CANCELADA); assert.equal(c.tipo, "cita");
+  assert.equal(colorBordeCita({ id: "x", tipo: "recordatorio" }), "#ea580c");
+  // App.tsx toma la paleta de aquí solo en v2 (legacy intacto)
+  const app = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.ok(/const TYPE_OPTIONS = ACCESS_V2\s*\? TYPE_OPTIONS_LEGACY\.map\(o=>\(\{ \.\.\.o, color:PALETA_TIPOS\[o\.v\]\.fuerte, pill:PALETA_TIPOS\[o\.v\]\.pill/.test(app));
+  assert.ok(/if \(ACCESS_V2\) Object\.keys\(PALETA_TIPOS\)\.forEach\(t=>\{ if \(EVENT_CONFIG\[t\]\) EVENT_CONFIG\[t\]=\{ \.\.\.EVENT_CONFIG\[t\], colorId:PALETA_TIPOS\[t\]\.colorId \}/.test(app));
+  assert.ok(/const TIPO_COLOR = ACCESS_V2\s*\?/.test(app));
+});
+
+test("r5 · 8-12: cancelada fuera de Hoy / Próximas / Sin resultado y SIEMPRE en Todas; contadores", () => {
+  const manana = cita({ id: "f1", fecha: "2026-09-30T18:00" });
+  const c = cancelarCita(cita({ id: "f2", fecha: "2026-09-30T18:00" }), LIAM, NOCHE, "viaje");
+  const hoyC = cancelarCita(cita({ id: "f3", fecha: "2026-09-29T21:00" }), LIAM, NOCHE, "x");
+  const pasadaC = cancelarCita(cita({ id: "f4", fecha: "2026-09-28T10:00" }), LIAM, NOCHE, "x");
+  for (const x of [c, hoyC, pasadaC]) {
+    assert.equal(enFiltro(x, "hoy", NOCHE), false);
+    assert.equal(enFiltro(x, "proximas", NOCHE), false);
+    assert.equal(enFiltro(x, "sinResultado", NOCHE), false);
+    assert.equal(enFiltro(x, "todas", NOCHE), true);
+  }
+  assert.deepEqual(agendaCounters([manana, c], NOCHE), { hoy: 0, proximas: 1, sinResultado: 0, todas: 2 });
+});
+
+test("r5 · 13-14: flujo completo — TLK crea, cancela (SET, no DELETE), Firestore conserva status y la reconstrucción la devuelve en Todas", () => {
+  // 1) La TLK crea la cita (mismo armado que la Agenda)
+  const d = emptyDocs();
+  const firestore = (ops: any[]) => ops.forEach((o: any) => { if (o.kind === "set") d.appts[o.id] = JSON.parse(JSON.stringify(o.data)); else if (o.kind === "delete") delete d.appts[o.id]; });
+  const nueva = { id: "a34", tipo: "cita", _type: "cita", nombre: "Prueba A34", fecha: "2026-09-30T18:00" };
+  const creada = trazarCambiosAppts([], enrichNewAppts([], [nueva], LIAM), LIAM, "telemarketing_ventas", NOCHE);
+  const r1 = diffState({ appts: [] }, { appts: creada }, d, ctxTLK); firestore(r1.ops);
+  let st: any = buildState(d, {}, "tlk1", "telemarketing_ventas");
+  // 2) La TLK la cancela desde la tarjeta (cancelarCita → setAppts → trazar → diff → apptDoc)
+  const cancelada = cancelarCita(st.appts.find((a: any) => a.id === "a34"), LIAM, NOCHE, "cliente de viaje");
+  const next = trazarCambiosAppts(st.appts, enrichNewAppts(st.appts, st.appts.map((a: any) => (a.id === "a34" ? cancelada : a)), LIAM), LIAM, "telemarketing_ventas", NOCHE);
+  const r2 = diffState(st, { ...st, appts: next }, d, ctxTLK);
+  assert.equal(r2.ops.length, 1); assert.equal(r2.ops[0].kind, "set");                       // SET, nunca DELETE
+  assert.equal(r2.blocked.length, 0);
+  firestore(r2.ops);
+  // 3) El documento en Firestore conserva la cita cancelada y sigue siendo de la TLK
+  const doc = d.appts.a34;
+  assert.deepEqual([doc.status, doc.cancelledByUid, doc.cancelReason, doc.createdByUid, doc.assignedTo, doc.tipo, doc.eliminado], ["cancelada", "tlk1", "cliente de viaje", "tlk1", null, "cita", false]);
+  // 4) Sigue entrando en las consultas de la TLK (lo que devuelve el listener)
+  const qs = queriesFor({ role: "telemarketing_ventas", uid: "tlk1" } as any, "appts");
+  assert.ok(qs.some((q: any) => q.where.every(([f, , v]: any) => doc[f] === v)), "la cancelada sigue en assignedTo==uid o createdByUid==uid");
+  // 5) buildState (reconstrucción desde Firestore) la incluye y la Agenda la muestra en Todas
+  st = buildState(d, {}, "tlk1", "telemarketing_ventas");
+  const a34 = st.appts.find((a: any) => a.id === "a34");
+  assert.ok(a34 && a34.status === "cancelada");
+  assert.ok(st.appts.filter((a: any) => enFiltro(a, "todas", NOCHE)).some((a: any) => a.id === "a34"));
+  assert.equal(st.appts.filter((a: any) => enFiltro(a, "proximas", NOCHE)).length, 0);
+  assert.deepEqual(agendaCounters(st.appts, NOCHE), { hoy: 0, proximas: 0, sinResultado: 0, todas: 1 });
+  // 6) Un cambio posterior de la TLK no la "reactiva" ni la borra: queda bloqueado (solo lectura)
+  const r3 = diffState(st, { ...st, appts: st.appts.map((a: any) => ({ ...a, notas: "x" })) }, d, ctxTLK);
+  assert.equal(r3.ops.length, 0);
+  const r4 = diffState(st, { ...st, appts: [] }, d, ctxTLK);                                  // intentar quitarla de la lista
+  assert.equal(r4.ops.length, 0); assert.ok(r4.blocked.length > 0);
+});
+
+test("r5 · 15: una cancelada no cuenta como duplicado activo", () => {
+  const c = cancelarCita(cita({ id: "c1", fecha: "2026-10-01T18:00" }), LIAM, NOCHE, "x");
+  assert.equal(duplicateApptCandidate([c], { id: "n", tipo: "cita", sourceSection: "agregados", sourceRecordId: "a1", fecha: "2026-10-01T18:00" }), null);
+  assert.equal(duplicateApptCandidate([c], { id: "n", tipo: "cita", telefono: "(210) 555-0101", fecha: "2026-10-01T18:00" }), null);
+});
+
+test("r5 · 16: ACCESS_V2=0 conserva los colores legacy tal cual", () => {
+  const app = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.ok(app.includes(`{ v:"cita",     ico:"📋", l:"Cita",         desc:"Azul · Google Calendar",    color:"#5b21b6", pill:"bg-purple-100 text-purple-800"    },`));
+  assert.ok(app.includes(`  : { cita:"#5b21b6", llamada:"#ea580c", cocinada:"#7c3aed", servicio:"#dc2626", personal:"#16a34a", entrevista:"#0d9488" };`));
+  assert.ok(app.includes(`cita:        { emoji:"📋", label:"Cita",                    colorId:"7",`));
+  assert.ok(app.includes(`const TIPO_BORDER = { cita:"border-l-[#7c3aed]"`));
+});
+
+test("r5.1 · Personal = azul en todo v2 (filtro, menú, tarjeta, título de Google/Apple); legacy conserva 🟢", () => {
+  const app = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const lineas = app.split("\n");
+  // v2: cada referencia de Personal usa 🔵
+  assert.ok(app.includes(`{v:"personal",   ico:ACCESS_V2?"🔵":"🟢", label:"Personal"}`), "TIPO_FILTROS");
+  assert.ok(app.includes("if (ACCESS_V2) EVENT_CONFIG.personal={ ...EVENT_CONFIG.personal, emoji:\"🔵\", title: n=>`🔵 Personal - ${n}` };"), "EVENT_CONFIG (título Google/Apple)");
+  assert.ok(app.includes(`...(o.v==="personal"?{ico:"🔵"}:{})`), "TYPE_OPTIONS");
+  assert.ok(app.includes(`personal:ACCESS_V2?"🔵":"🟢"`), "TIPO_ICON");
+  // ningún 🟢 de Personal queda sin condición: solo las dos definiciones legacy (sobrescritas en v2)
+  const sinCondicion = lineas.filter((l) => l.includes("🟢") && /ersonal/.test(l) && !/ACCESS_V2/.test(l) && !/^\s*\/\//.test(l));
+  assert.equal(sinCondicion.length, 2);
+  assert.ok(sinCondicion[0].trim().startsWith(`{ v:"personal", ico:"🟢"`) && sinCondicion[1].trim().startsWith(`personal:    { emoji:"🟢"`));
+  // legacy: literales exactos de main/r4
+  assert.ok(app.includes(`  { v:"personal", ico:"🟢", l:"Personal",     desc:"Verde · Google Calendar",    color:"#16a34a", pill:"bg-green-100 text-green-800"  },`));
+  assert.ok(app.includes("  personal:    { emoji:\"🟢\", label:\"Personal\",                colorId:\"10\", title: n=>`🟢 Personal - ${n}` },     // verde (albahaca)"));
+  assert.equal(PALETA_TIPOS.personal.nombre, "Azul"); assert.equal(PALETA_TIPOS.personal.color, "#2563eb");
 });
