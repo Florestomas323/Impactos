@@ -263,3 +263,30 @@ export function accionesCitaV2(a: any, puedeResultado: boolean) {
     cancelar: !cancelada && !conResultado,
   };
 }
+
+// ════════ Paleta OFICIAL de tipos de agenda (v2) — fuente única ════════
+// 6 tipos oficiales. Reset / seguimiento / pendiente / reprogramada_visita / cancelada
+// son acciones, resultados o estados: NO son categorías y no reciben color propio.
+//   color  → borde lateral, puntos del calendario y leyenda
+//   fuerte → texto sobre blanco y fondos con texto blanco (el amarillo se oscurece por contraste)
+//   colorId → Google Calendar (10 Basil · 11 Tomato · 3 Grape · 5 Banana · 6 Tangerine · 9 Blueberry)
+export const PALETA_TIPOS: Record<string, { nombre: string; color: string; fuerte: string; pill: string; colorId: string }> = {
+  cita:       { nombre: "Verde",    color: "#16a34a", fuerte: "#15803d", pill: "bg-green-100 text-green-800",   colorId: "10" },
+  servicio:   { nombre: "Rojo",     color: "#dc2626", fuerte: "#dc2626", pill: "bg-red-100 text-red-800",       colorId: "11" },
+  entrevista: { nombre: "Morado",   color: "#7c3aed", fuerte: "#7c3aed", pill: "bg-violet-100 text-violet-800", colorId: "3" },
+  cocinada:   { nombre: "Amarillo", color: "#eab308", fuerte: "#a16207", pill: "bg-yellow-100 text-yellow-800", colorId: "5" },
+  llamada:    { nombre: "Naranja",  color: "#ea580c", fuerte: "#ea580c", pill: "bg-orange-100 text-orange-800", colorId: "6" },
+  personal:   { nombre: "Azul",     color: "#2563eb", fuerte: "#2563eb", pill: "bg-blue-100 text-blue-800",     colorId: "9" },
+};
+export const COLOR_CANCELADA = "#94a3b8";            // gris: estado, no categoría
+export const TIPOS_OFICIALES = ["cita", "servicio", "entrevista", "cocinada", "llamada", "personal"];
+// "recordatorio" (legacy) es el mismo tipo visual que "llamada" (Recordatorio).
+export const tipoOficial = (t: any): string | null => {
+  const k = String(t || "");
+  if (k === "recordatorio") return "llamada";
+  return PALETA_TIPOS[k] ? k : null;
+};
+export const colorTipo = (t: any): string | null => { const k = tipoOficial(t); return k ? PALETA_TIPOS[k].color : null; };
+export const ETIQUETA_TIPO: Record<string, string> = { cita: "Cita", servicio: "Servicio", entrevista: "Entrevista", cocinada: "Cocinada", llamada: "Recordatorio", personal: "Personal" };
+// Borde lateral / punto de una cita concreta: una cancelada se ve GRIS (sigue siendo de su tipo).
+export const colorBordeCita = (a: any): string => (isCancelled(a) ? COLOR_CANCELADA : colorTipo(a?._type || a?.tipo) || COLOR_CANCELADA);
