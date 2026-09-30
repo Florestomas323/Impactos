@@ -18,7 +18,7 @@ import { NavV2 } from "./components/NavV2";
 import { CommandCenterV2 } from "./components/dashboard/CommandCenterV2";
 import { TIPOS_AGENDA_POR_ROL, PERIODO_LABEL, periodoSoportado } from "./services/commandCenter";
 import { enrichNewAppts, trazaRegistro } from "./services/apptTrace";
-import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEvento, fechaLocal as fechaLocalV2, reprogramarAntesDeVisita, reprogramarDesdeVisita, registrarResultado as registrarResultadoV2, cancelarCita as cancelarCitaV2, enFiltro, agendaCounters, isPastAppt, canRecordVisitResult, canHardDelete, duplicateApptCandidate } from "./services/agendaV2";
+import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEvento, fechaLocal as fechaLocalV2, reprogramarAntesDeVisita, reprogramarDesdeVisita, registrarResultado as registrarResultadoV2, cancelarCita as cancelarCitaV2, enFiltro, agendaCounters, isPastAppt, canRecordVisitResult, canHardDelete, duplicateApptCandidate, PALETA_TIPOS, COLOR_CANCELADA, isCancelled as isCancelledV2, colorBordeCita, ETIQUETA_TIPO, tipoOficial } from "./services/agendaV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
 import { RutasEquipoV2 } from "./components/rutas/RutasEquipoV2";
@@ -1809,7 +1809,8 @@ function ClientForm({ initial, onSave, onClose, type }) {
 }
 
 // ─── APPOINTMENT FORM (4 tipos con campos dinámicos) ──────────
-const TYPE_OPTIONS = [
+// v2: colores y descripciones desde la paleta oficial (services/agendaV2.ts PALETA_TIPOS).
+const TYPE_OPTIONS_LEGACY = [
   { v:"cita",     ico:"📋", l:"Cita",         desc:"Azul · Google Calendar",    color:"#5b21b6", pill:"bg-purple-100 text-purple-800"    },
   { v:"llamada",  ico:"📞", l:"Recordatorio", desc:"Naranja · Google Calendar",  color:"#ea580c", pill:"bg-orange-100 text-orange-800"},
   { v:"cocinada", ico:"🍳", l:"Cocinada",     desc:"Morado · Google Calendar",   color:"#7c3aed", pill:"bg-purple-100 text-purple-800"},
@@ -1817,6 +1818,10 @@ const TYPE_OPTIONS = [
   { v:"personal", ico:"🟢", l:"Personal",     desc:"Verde · Google Calendar",    color:"#16a34a", pill:"bg-green-100 text-green-800"  },
   { v:"entrevista",ico:"🤝", l:"Entrevista",   desc:"Teal · Reclutamiento",       color:"#0d9488", pill:"bg-teal-100 text-teal-800"   },
 ];
+const TYPE_OPTIONS = ACCESS_V2
+  ? TYPE_OPTIONS_LEGACY.map(o=>({ ...o, color:PALETA_TIPOS[o.v].fuerte, pill:PALETA_TIPOS[o.v].pill, ...(o.v==="personal"?{ico:"🔵"}:{}),
+      desc:`${PALETA_TIPOS[o.v].nombre} · ${o.v==="entrevista"?"Reclutamiento":"Google Calendar"}` }))
+  : TYPE_OPTIONS_LEGACY;
 
 // ── Correos del equipo — edita aquí si cambian ──────────────
 const TEAM_CONTACTS = [
@@ -2044,6 +2049,11 @@ const EVENT_CONFIG = {
   personal:    { emoji:"🟢", label:"Personal",                colorId:"10", title: n=>`🟢 Personal - ${n}` },     // verde (albahaca)
   entrevista:  { emoji:"🤝", label:"Entrevista",              colorId:"9",  title: n=>`🤝 Entrevista - ${n}` },  // azul (arándano)
 };
+// v2: colorId de Google Calendar según la paleta oficial (cita 10 · servicio 11 · entrevista 3 ·
+// cocinada 5 · recordatorio 6 · personal 9). Los comentarios de arriba describen la app legacy.
+if (ACCESS_V2) Object.keys(PALETA_TIPOS).forEach(t=>{ if (EVENT_CONFIG[t]) EVENT_CONFIG[t]={ ...EVENT_CONFIG[t], colorId:PALETA_TIPOS[t].colorId }; });
+// v2: Personal = azul también en el ícono y el título del evento (legacy conserva 🟢).
+if (ACCESS_V2) EVENT_CONFIG.personal={ ...EVENT_CONFIG.personal, emoji:"🔵", title: n=>`🔵 Personal - ${n}` };
 async function createCalendarEvent(appt) {
   const start  = new Date(appt.fecha);
   const end    = new Date(start.getTime() + 3600000);
@@ -3760,10 +3770,11 @@ function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada, v2=null }) {
       <div className="flex items-center gap-3 cursor-pointer select-none" onClick={()=>setOpen(p=>!p)}>
         <div className="text-lg w-7 text-center shrink-0">{TIPO_ICON[a._type]||"📋"}</div>
         <div className="flex-1 min-w-0">
-          <div className="font-bold text-sm text-[#1f2d3d] truncate">{a.nombre}</div>
+          <div className={v2&&isCancelledV2(a)?"font-bold text-sm text-slate-500 truncate":"font-bold text-sm text-[#1f2d3d] truncate"}>{a.nombre}</div>
           <div className="text-xs text-slate-400">
-            {mostrarFecha && fechaStr ? <span className="font-bold text-slate-500">{fechaStr} · </span> : null}
-            {horaStr}{a.direccion?` · ${a.direccion}`:""}
+            {(()=>{ const fh=<>{mostrarFecha && fechaStr ? <span className="font-bold text-slate-500">{fechaStr} · </span> : null}{horaStr}</>;
+              return v2&&isCancelledV2(a) ? <span className="line-through">{fh}</span> : fh; })()}{/* v2: cancelada → fecha/hora tachadas */}
+            {a.direccion?` · ${a.direccion}`:""}
           </div>
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
             {/* Servicio: indicador verde (realizado) / rojo (no realizado o pendiente) */}
@@ -3778,7 +3789,8 @@ function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada, v2=null }) {
             ) : (
               <>
                 {resInfo && <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md" style={resInfo.style}>{resInfo.label}</span>}
-                {v2 && a.status==="cancelada" && <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-red-100 text-red-700">Cancelada</span>}
+                {v2 && tipoOficial(a._type||a.tipo) && <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md ${PALETA_TIPOS[tipoOficial(a._type||a.tipo)].pill}`}>{ETIQUETA_TIPO[tipoOficial(a._type||a.tipo)]}</span>}
+                {v2 && a.status==="cancelada" && <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-200 text-slate-600">Cancelada</span>}
                 {esPasada && !a.resultado && !(v2 && a.status==="cancelada") && <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-700"><Ico e="⏰" className="mr-1.5" />Sin resultado</span>}
               </>
             )}
@@ -4648,8 +4660,10 @@ function Stats({ data, callLog, appts, init=null }) {
 
 // ─── AGENDA ───────────────────────────────────────────────────
 const TIPO_BORDER = { cita:"border-l-[#7c3aed]", llamada:"border-l-orange-400", cocinada:"border-l-purple-500", servicio:"border-l-red-500", personal:"border-l-green-500", entrevista:"border-l-teal-500" };
-const TIPO_ICON   = { cita:"📋", llamada:"📞", cocinada:"🍳", servicio:"🔧", personal:"🟢", entrevista:"🤝" };
-const TIPO_COLOR = { cita:"#5b21b6", llamada:"#ea580c", cocinada:"#7c3aed", servicio:"#dc2626", personal:"#16a34a", entrevista:"#0d9488" };
+const TIPO_ICON   = { cita:"📋", llamada:"📞", cocinada:"🍳", servicio:"🔧", personal:ACCESS_V2?"🔵":"🟢", entrevista:"🤝" };   // v2: Personal = azul
+const TIPO_COLOR = ACCESS_V2
+  ? { ...Object.fromEntries(Object.entries(PALETA_TIPOS).map(([t,p])=>[t,p.color])), recordatorio:PALETA_TIPOS.llamada.color }
+  : { cita:"#5b21b6", llamada:"#ea580c", cocinada:"#7c3aed", servicio:"#dc2626", personal:"#16a34a", entrevista:"#0d9488" };
 const MESES_CAL = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const DIAS_CAL  = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
 
@@ -4703,13 +4717,14 @@ function CalendarioAgenda({ appts, onUpdate, onDelete, v2=null }) {
   const cardsDe = (arr, mostrarFecha=false) => arr.map(a=>{
     const esPasada=a.fecha && a.fecha<new Date().toISOString() && !(a.fecha||"").startsWith(hoyISO);
     return (
-      <div key={a.id} className={`bg-white border-2 border-[#e8edf3] border-l-4 rounded-2xl shadow-sm ${TIPO_BORDER[a._type||a.tipo]||"border-l-slate-300"}`}>
+      <div key={a.id} className={`bg-white border-2 border-[#e8edf3] border-l-4 rounded-2xl shadow-sm ${TIPO_BORDER[a._type||a.tipo]||"border-l-slate-300"}${v2&&isCancelledV2(a)?" opacity-70":""}`}
+        style={v2?{borderLeftColor:colorBordeCita(a)}:undefined}>
         <CitaCard a={a} mostrarFecha={mostrarFecha} esPasada={v2?isPastAppt(a)&&a.status!=="cancelada":esPasada} onUpdate={onUpdate} onDelete={onDelete} v2={v2} />
       </div>
     );
   });
 
-  const Dot = ({t}) => <span className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0" style={{background:TIPO_COLOR[t]||"#94a3b8"}} />;
+  const Dot = ({t, gris=false}) => <span className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0" style={{background:gris?COLOR_CANCELADA:(TIPO_COLOR[t]||"#94a3b8")}} />;
 
   return (
     <div>
@@ -4772,7 +4787,7 @@ function CalendarioAgenda({ appts, onUpdate, onDelete, v2=null }) {
                       style={esSel?{background:RP.navy}:{}}>
                       <span className={`text-xs font-bold ${esSel?"text-white":esHoy?"text-[#5b21b6]":"text-slate-700"}`}>{d.getDate()}</span>
                       <span className="flex gap-0.5 mt-1 flex-wrap justify-center px-0.5">
-                        {citas.slice(0,3).map((a,j)=><Dot key={j} t={a._type||a.tipo} />)}
+                        {citas.slice(0,3).map((a,j)=><Dot key={j} t={a._type||a.tipo} gris={!!v2 && isCancelledV2(a)} />)}
                         {citas.length>3 && <span className={`text-[8px] font-bold leading-none ${esSel?"text-white":"text-slate-400"}`}>+{citas.length-3}</span>}
                       </span>
                     </button>
@@ -4942,7 +4957,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
     {v:"llamada",    ico:"🔔", label:"Recordatorio"},
     {v:"cocinada",   ico:"🍳", label:"Cocinada"},
     {v:"servicio",   ico:"🔧", label:"Servicio"},
-    {v:"personal",   ico:"🟢", label:"Personal"},
+    {v:"personal",   ico:ACCESS_V2?"🔵":"🟢", label:"Personal"},   // v2: Personal = azul
     {v:"entrevista", ico:"🤝", label:"Entrevista"},
   ];
   const RES_FILTROS=[
@@ -5079,7 +5094,8 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
         : <div className="space-y-2">{lista.map(a=>{
             const esPasada=V2 ? isPastAppt(a) && a.status!=="cancelada" : a.fecha&&a.fecha<ahora&&!a.fecha.startsWith(todayStr);
             return (
-              <div key={a.id} className={`bg-white border-2 border-[#e8edf3] border-l-4 rounded-2xl shadow-sm ${TIPO_BORDER[a._type]||"border-l-slate-300"} ${esPasada&&!a.resultado?"ring-1 ring-amber-200":""}`}>
+              <div key={a.id} className={`bg-white border-2 border-[#e8edf3] border-l-4 rounded-2xl shadow-sm ${TIPO_BORDER[a._type]||"border-l-slate-300"} ${esPasada&&!a.resultado?"ring-1 ring-amber-200":""}${V2&&isCancelledV2(a)?" opacity-70":""}`}
+                style={V2?{borderLeftColor:colorBordeCita(a)}:undefined}>
                 <CitaCard a={a} mostrarFecha={filtro!=="hoy"} esPasada={esPasada} v2={cfgV2}
                   onUpdate={u=>{setAppts(p=>p.map(x=>x.id===u.id?u:x)); if(u.resultado==="demo_venta" && !u._sincronizado && onVentaSync) onVentaSync(u);}}
                   onDelete={id=>setAppts(p=>p.filter(x=>x.id!==id))} />
