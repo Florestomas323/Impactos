@@ -22,7 +22,8 @@ const cuando = (iso: any) => { const l = fechaLocal(iso); return l ? new Date(l)
 
 // ── Acciones de UN servicio ──────────────────────────────────────────────────
 // productos: [{label, meses}] · appts: para revisar duplicados del mantenimiento.
-export function ServicioAccionesV2({ s, autor, puedeGestionar, puedeBorrar, appts, productos = [], genId, onUpdate, onCrear, onBorrar }: any) {
+// onVenta(u): se avisa al registrar una VENTA (Venta → Distribución en App).
+export function ServicioAccionesV2({ s, autor, puedeGestionar, puedeBorrar, appts, productos = [], genId, onUpdate, onCrear, onBorrar, onVenta }: any) {
   const [paso, setPaso] = useState("");            // "" | venta | reprogramar | cancelar | editar | corregir
   const [venta, setVenta] = useState({ prod: "", monto: "" });
   const [fecha, setFecha] = useState(fechaLocal(s.fecha) || localDateTimeValue(new Date()));
@@ -51,6 +52,7 @@ export function ServicioAccionesV2({ s, autor, puedeGestionar, puedeBorrar, appt
     setEnviado(true);
     const u = registrarVentaServicio(s, { monto: venta.monto, producto: label, meses }, autor);
     onUpdate(u); setPaso("");
+    if (onVenta) onVenta(u);
     crearMantenimiento(u, label, meses, []);
   };
   // Confirmar corrección: resultado limpio + historial marcado + mantenimientos de la venta anterior cancelados.
@@ -60,6 +62,10 @@ export function ServicioAccionesV2({ s, autor, puedeGestionar, puedeBorrar, appt
     const cancelados = cancelarMantAnteriores();
     const u = corregirResultadoServicio(s, confirmar, autor);
     onUpdate(u); cancelados.forEach((x: any) => onUpdate(x));
+    // Toda corrección se reconcilia con Distribución: si sigue siendo venta se vincula;
+    // si dejó de ser venta se elimina esa referencia y, si era un registro auto-creado
+    // exclusivamente por esa venta, se retira de Distribución.
+    if (onVenta) onVenta(u);
     if (confirmar.resultado === "venta") crearMantenimiento(u, confirmar.producto || "", Number(confirmar.meses) || 0, cancelados);
     setConfirmar(null); setPaso("");
   };
@@ -78,7 +84,7 @@ export function ServicioAccionesV2({ s, autor, puedeGestionar, puedeBorrar, appt
         <span className={`inline-flex items-center font-bold px-2.5 py-1 rounded-full ${info.badge}`}>{info.label}</span>
         {est === "venta" && s.monto ? <span className="font-bold text-emerald-700">${Number(s.monto).toLocaleString("en-US")}{s.producto ? ` · ${s.producto}` : ""}</span> : null}
         {s.resultByName && !cancelado && <span className="text-slate-500">Registrado por <b>{s.resultByName}</b>{s.resultAt ? ` · ${cuando(s.resultAt)}` : ""}</span>}
-        {cancelado && <span className="text-slate-500">por <b>{s.cancelledByName || "—"}</b>{s.cancelReason ? ` · ${s.cancelReason}` : ""}</span>}
+
         {s.createdByName && <span className="text-slate-400">· Agendado por {s.createdByName}</span>}
       </div>
       {/* Operación: llamar, WhatsApp (sin envío automático), cómo llegar (dirección del servicio, no GPS) */}
@@ -177,6 +183,21 @@ export function ServicioAccionesV2({ s, autor, puedeGestionar, puedeBorrar, appt
           ))}
         </div>
       )}
+      {/* Trazabilidad visible: cancelación y reprogramaciones (misma cita, sin duplicar) */}
+      {cancelado && (
+        <div className="px-2.5 py-1.5 rounded-lg bg-slate-100 text-[11px] text-slate-600">
+          <div><b>Cancelado</b>{s.cancelledAt ? ` · ${cuando(s.cancelledAt)}` : ""}{s.cancelledByName ? ` · ${s.cancelledByName}` : ""}</div>
+          {s.cancelReason ? <div>Motivo: {s.cancelReason}</div> : null}
+        </div>
+      )}
+      {(s.reprogramHistory || []).length > 0 && (
+        <div className="space-y-0.5 text-[11px] text-slate-600">
+          {(s.reprogramHistory || []).map((h: any, i: number) => (
+            <div key={i}><b>Reprogramado:</b> {cuando(h.previousDate) || "sin fecha"} → {cuando(h.newDate)}{h.changedByName ? ` · ${h.changedByName}` : ""}
+              {h.changedAt ? <span className="text-slate-400"> ({cuando(h.changedAt)})</span> : null}</div>
+          ))}
+        </div>
+      )}
       {(s.servicioHistorial || []).length > 0 && (
         <div className="text-[10px] text-slate-400">
           Historial: {(s.servicioHistorial || []).slice(-3).map((h: any) => `${ESTADO_SERVICIO[h.resultado as keyof typeof ESTADO_SERVICIO]?.label || h.resultado} (${cuando(h.fecha)}${h.nombre || h.agente ? ` · ${h.nombre || h.agente}` : ""})`).join(" → ")}
@@ -189,7 +210,7 @@ export function ServicioAccionesV2({ s, autor, puedeGestionar, puedeBorrar, appt
 // ── Pestaña Servicio (v2) ────────────────────────────────────────────────────
 const FILTROS: Array<[FiltroServicio, string]> = [["hoy", "Hoy"], ["todos", "Todos"], ["pendiente", "Pend."], ["hechos", "Hechos"], ["no_realizados", "No"], ["cancelados", "Cancel."]];
 const FILTRO_INIT: Record<string, FiltroServicio> = { hoy: "hoy", todos: "todos", pendiente: "pendiente", realizado: "hechos", no_realizado: "no_realizados" };
-export function ServiciosV2({ appts, setAppts, autor, puedeGestionar, puedeBorrar, productos, genId, renderCartuchos, init }: any) {
+export function ServiciosV2({ appts, setAppts, autor, puedeGestionar, puedeBorrar, productos, genId, renderCartuchos, init, onVenta }: any) {
   const [vista, setVista] = useState("servicios");
   const [filtro, setFiltro] = useState<FiltroServicio>(FILTRO_INIT[init?.filtro] || "todos");
   const [abierto, setAbierto] = useState<any>(null);
@@ -242,7 +263,7 @@ export function ServiciosV2({ appts, setAppts, autor, puedeGestionar, puedeBorra
                       {s.cuenta && <div className="text-xs text-slate-500">Cuenta: {s.cuenta}</div>}
                       {s.notas && <div className="text-xs text-slate-400 italic">"{s.notas}"</div>}
                       <ServicioAccionesV2 s={s} autor={autor} puedeGestionar={puedeGestionar} puedeBorrar={puedeBorrar} appts={appts} productos={productos}
-                        genId={genId} onUpdate={onUpdate} onCrear={onCrear} onBorrar={onBorrar} />
+                        genId={genId} onUpdate={onUpdate} onCrear={onCrear} onBorrar={onBorrar} onVenta={onVenta} />
                     </div>
                   )}
                 </div>
