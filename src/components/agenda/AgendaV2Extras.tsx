@@ -83,19 +83,21 @@ export function ReprogramarEnVisitaV2({ onConfirmar, onVolver }: any) {
 }
 
 // ── "Nueva visita": buscar cliente en MI cartera (o cita manual) ────────────
-export function ClientePickerV2({ allData, onElegir, onManual, onCerrar }: any) {
+// Opcionales (Servicio v2): candidatos (lista ya ordenada), textos y etiqueta de sección.
+const SECCION: Record<string, string> = { distribucion: "Distribución", agregados: "Agregado", referidos: "Referido", prospectos: "Prospecto" };
+export function ClientePickerV2({ allData, onElegir, onManual, onCerrar, candidatos, texto, manualLabel, mostrarSeccion = false }: any) {
   const [q, setQ] = useState("");
   const [ver, setVer] = useState(30);
-  const todos = candidatosCartera(allData);
+  const todos = candidatos || candidatosCartera(allData);
   const lista = buscarEnCartera(todos, q);
   return (
     <div className="space-y-3">
-      <div className="text-sm text-slate-600">Busca el cliente en tu cartera: se llenan sus datos y la cita queda ligada a su registro.</div>
+      <div className="text-sm text-slate-600">{texto || "Busca el cliente en tu cartera: se llenan sus datos y la cita queda ligada a su registro."}</div>
       <input autoFocus value={q} onChange={(e) => { setQ(e.target.value); setVer(30); }} placeholder="Nombre, teléfono o ciudad" className="w-full border-2 border-[#e5def4] rounded-xl px-3 py-2.5 text-sm" />
       <div className="max-h-[50vh] overflow-y-auto space-y-1.5">
         {lista.slice(0, ver).map((c: any) => (
           <button key={c.key} onClick={() => onElegir(c)} className="w-full text-left px-3 py-2.5 rounded-xl border border-[#e8edf3] bg-white hover:border-[#93C5FD]">
-            <div className="font-bold text-sm text-[#1f2d3d]">{c.nombre || "(sin nombre)"}</div>
+            <div className="font-bold text-sm text-[#1f2d3d]">{c.nombre || "(sin nombre)"}{mostrarSeccion && SECCION[c.section] ? <span className="ml-2 text-[10px] font-bold text-slate-400">{SECCION[c.section]}</span> : null}</div>
             <div className="text-xs text-slate-400">{[c.telefono, [c.ciudad, c.cp].filter(Boolean).join(" ")].filter(Boolean).join(" · ")}</div>
           </button>
         ))}
@@ -103,7 +105,7 @@ export function ClientePickerV2({ allData, onElegir, onManual, onCerrar }: any) 
         {lista.length > ver && <button onClick={() => setVer(ver + 30)} className="w-full py-2 text-xs font-bold text-slate-500">Ver más ({lista.length - ver})</button>}
       </div>
       <div className="flex gap-2 pt-1 border-t border-[#f1f5f9]">
-        <button onClick={onManual} className="flex-1 text-xs font-bold py-2.5 rounded-lg bg-[#f4f6f9] text-slate-600">Cita manual (sin cliente de mi cartera)</button>
+        <button onClick={onManual} className="flex-1 text-xs font-bold py-2.5 rounded-lg bg-[#f4f6f9] text-slate-600">{manualLabel || "Cita manual (sin cliente de mi cartera)"}</button>
         <button onClick={onCerrar} className="text-xs font-bold py-2.5 px-3 rounded-lg text-slate-500">Cerrar</button>
       </div>
     </div>
@@ -111,12 +113,12 @@ export function ClientePickerV2({ allData, onElegir, onManual, onCerrar }: any) 
 }
 
 // ── Aviso de posible duplicado (no bloquea) ─────────────────────────────────
-export function AvisoDuplicadoV2({ existente, onVolver, onGuardar }: any) {
+export function AvisoDuplicadoV2({ existente, onVolver, onGuardar, mensaje }: any) {
   const f = fechaLocal(existente?.fecha).replace("T", " ");
   return (
     <div className="space-y-3">
       <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-800">
-        <b>Ya existe una cita para este cliente cerca de esa hora.</b>
+        <b>{mensaje || "Ya existe una cita para este cliente cerca de esa hora."}</b>
         <div className="mt-1 text-xs">{existente?.nombre} · {f}{existente?.createdByName ? ` · agendada por ${existente.createdByName}` : ""}</div>
       </div>
       <div className="flex gap-2">
