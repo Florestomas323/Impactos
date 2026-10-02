@@ -19,7 +19,7 @@ import { CommandCenterV2 } from "./components/dashboard/CommandCenterV2";
 import { TIPOS_AGENDA_POR_ROL, PERIODO_LABEL, periodoSoportado } from "./services/commandCenter";
 import { enrichNewAppts, trazaRegistro } from "./services/apptTrace";
 import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEvento, fechaLocal as fechaLocalV2, reprogramarAntesDeVisita, reprogramarDesdeVisita, registrarResultado as registrarResultadoV2, cancelarCita as cancelarCitaV2, enFiltro, agendaCounters, isPastAppt, canRecordVisitResult, canHardDelete, duplicateApptCandidate, PALETA_TIPOS, COLOR_CANCELADA, isCancelled as isCancelledV2, colorBordeCita, ETIQUETA_TIPO, tipoOficial } from "./services/agendaV2";
-import { contarVentasDemosV2, esVentaServicio as esVentaServicioV2, serviceMetricDate, serviciosRealizados, servicioDesdeCartucho, duplicateServiceCandidate, candidatosServicio, estadoServicio, ESTADO_SERVICIO } from "./services/serviceV2";
+import { contarVentasDemosV2, serviceMetricDate, serviciosRealizados, ventaServicioCartucho, ventasServicioDe, apptsDelGrupo, servicioDesdeCartucho, duplicateServiceCandidate, candidatosServicio, estadoServicio, ESTADO_SERVICIO } from "./services/serviceV2";
 import { ServicioAccionesV2, ServiciosV2 } from "./components/servicio/ServicioV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
@@ -545,6 +545,14 @@ function calcularCartuchos(flatClientes, appts, ventanaDias=30, hoy=new Date()){
   });
   // Ventas registradas en citas de la agenda
   (appts||[]).forEach(a=>{
+    // v2: venta durante un servicio con ciclo → mismo cálculo, desde la fecha REAL (local) de la venta
+    const vs = ACCESS_V2 ? ventaServicioCartucho(a) : null;
+    if(vs){
+      push(a.nombre, a.telefono, a.producto, vs.meses, vs.fechaVenta, "servicio",
+        { ...(a.sourceRecordId!=null&&a.sourceRecordId!==""?{ sourceSection:a.sourceSection, sourceRecordId:String(a.sourceRecordId), ...(a.sourceRefIndex!=null?{sourceRefIndex:a.sourceRefIndex}:{}) }:{}),
+          ...(a.direccion?{direccion:a.direccion}:{}), ...(a.ciudad?{ciudad:a.ciudad}:{}), ...(a.cp?{cp:a.cp}:{}) });
+      return;
+    }
     if((a.resultado==="demo_venta"||a.resultado==="venta") && a.cartucho_meses>0){
       push(a.nombre, a.telefono, a.producto, a.cartucho_meses, a.fecha, "agenda",
         { ...(a.sourceRecordId!=null&&a.sourceRecordId!==""?{ sourceSection:a.sourceSection, sourceRecordId:String(a.sourceRecordId), ...(a.sourceRefIndex!=null?{sourceRefIndex:a.sourceRefIndex}:{}) }:{}),
@@ -1311,9 +1319,8 @@ function calcularSemanaAgente(agente, allData){
     if((a.resultado==="demo_venta"||a.resultado==="venta") && a.monto) volumen += Number(a.monto)||0;
   });
   // v2: venta durante un servicio = venta + volumen (sin demo), en la fecha real del resultado.
-  if(ACCESS_V2) (allData.appts||[]).forEach(a=>{
-    if(agente && a.agente!==agente) return;
-    if(esVentaServicioV2(a) && enSemana(serviceMetricDate(a))){ ventas++; volumen += Number(a.monto)||0; }
+  if(ACCESS_V2) ventasServicioDe(allData.appts, agente).forEach(a=>{     // persona = quien registró el resultado (resultByName)
+    if(enSemana(serviceMetricDate(a))){ ventas++; volumen += Number(a.monto)||0; }
   });
   clientes.forEach(c=>{
     lst(c.historial).forEach(h=>{
@@ -3474,8 +3481,16 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
     );
     setShowForm(false);setEditItem(null);
   };
-  const openSchedule=(client,tipo=null)=>{setScheduleClient(client);setForceTipo(tipo);};
-  const handleSchedule=appt=>{
+  const openSchedule=(client,tipo=null)=>{setScheduleClient(client);setForceTipo(tipo);setDupServ(null);};
+  const [dupServ,setDupServ]=useState(null);   // v2: {appt, existente} → aviso de servicio duplicado
+  const handleSchedule=(appt, forzar=false)=>{
+    // v2 · Servicio: mismo aviso de duplicado que Agenda y Cartuchos, ANTES de guardar (no bloquea).
+    if(ACCESS_V2 && appt.tipo==="servicio" && !forzar){
+      const traza = scheduleClient ? trazaRegistro({...scheduleClient, section:scheduleClient._tipo||({agregado:"agregados",prospecto:"prospectos",referido:"referidos",distribucion:"distribucion"})[type]}) : {};
+      const existente = duplicateServiceCandidate(allData?.appts||[], {...appt, ...traza, tipo:"servicio"});
+      if(existente){ setDupServ({appt, existente}); return; }
+    }
+    setDupServ(null);
     setCalMsg("");
     window.open(gcalLink(appt),"_blank");
     if(setAppts) setAppts(p=>[{...appt,...(ACCESS_V2&&scheduleClient?trazaRegistro({...scheduleClient, section:scheduleClient._tipo||({agregado:"agregados",prospecto:"prospectos",referido:"referidos",distribucion:"distribucion"})[type]}):{}),id:genId(),_type:appt.tipo},...p]); // v2: cita ligada a su registro
@@ -3724,7 +3739,14 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
         ))}
       </div>
       {showForm && <Modal title={`${editItem?"Editar":"Nuevo"} — ${title}`} onClose={()=>{setShowForm(false);setEditItem(null);}}><ClientForm initial={editItem} type={type} onSave={saveNew} onClose={()=>{setShowForm(false);setEditItem(null);}} /></Modal>}
-      {scheduleClient && <Modal title="📅 Agendar en Google Calendar" onClose={()=>{setScheduleClient(null);setForceTipo(null);}}><AppointmentForm client={scheduleClient} forceTipo={forceTipo} loading={calLoading} onSave={handleSchedule} onClose={()=>{setScheduleClient(null);setForceTipo(null);}} agenteActivo={agente} /></Modal>}
+      {scheduleClient && <Modal title="📅 Agendar en Google Calendar" onClose={()=>{setScheduleClient(null);setForceTipo(null);setDupServ(null);}}>{(()=>{
+        const form=<AppointmentForm client={scheduleClient} forceTipo={forceTipo} loading={calLoading} onSave={handleSchedule} onClose={()=>{setScheduleClient(null);setForceTipo(null);}} agenteActivo={agente} />;
+        if(!ACCESS_V2) return form;
+        // v2: aviso de servicio duplicado; el formulario sigue montado (oculto) → "Volver" conserva lo escrito
+        return <>{dupServ && <AvisoDuplicadoV2 existente={dupServ.existente} mensaje="Ya existe un servicio similar para este cliente cerca de esa fecha."
+          onVolver={()=>setDupServ(null)} onGuardar={()=>handleSchedule(dupServ.appt, true)} />}
+          <div style={dupServ?{display:"none"}:undefined}>{form}</div></>;
+      })()}</Modal>}
     </div>
   );
 }
@@ -4591,7 +4613,8 @@ function Stats({ data, callLog, appts, init=null }) {
               const datos = esRef
                 ? cards.reduce((n,anf)=> n + (anf.eliminado?0:lst(anf.referidos).filter(r=>enMes(r.creado||anf.creado)).length), 0)
                 : cards.filter(c=>!c.eliminado && enMes(c.creado)).length;
-              const vd = contarVentasDemos({ clientes:clientesG, enP:enMes });
+              // v2: + citas/servicios ligados a ESTE grupo por sourceSection (sin source → ningún grupo)
+              const vd = contarVentasDemos({ clientes:clientesG, enP:enMes, ...(ACCESS_V2?{ appts:apptsDelGrupo(appts, g.key) }:{}) });
               return (
               <div key={g.key} className="border border-[#e8edf3] rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
@@ -6881,6 +6904,12 @@ function calcularRacha(inc, allData){
       const idx=idxDe(a.fecha);
       if(idx>=0 && idx<semanas.length) acum(idx,"citas");
     }
+  });
+  // v2: venta durante un SERVICIO = Venta (nunca Demo), en la semana REAL del resultado,
+  // atribuida a quien la registró (resultByName; legacy: agente).
+  if(ACCESS_V2) ventasServicioDe(allData.appts, agente).forEach(a=>{
+    const idx=idxDe(serviceMetricDate(a));
+    if(idx>=0 && idx<semanas.length) acum(idx,"ventas");
   });
   // Demos y ventas desde historial de clientes
   clientes.forEach(c=>{
