@@ -267,3 +267,63 @@ export const serviciosRealizados = (appts: any[], enP: (f: string) => boolean) =
   (appts || []).filter((a) => esServicioHecho(a) && enP(serviceMetricDate(a))).length;
 
 export { localDateTimeValue };
+
+// ════════ Cartuchos y filtros (r1.2) ════════
+// Tiempo humano: 0–30 días → días · 31–365 → meses · >365 → años y meses · negativo → vencido.
+function cantidadHumana(d: number) {
+  if (d <= 30) return d === 1 ? "1 día" : `${d} días`;
+  if (d <= 365) { const m = Math.max(1, Math.round(d / 30.4375)); return m === 1 ? "1 mes" : `${m} meses`; }
+  let a = Math.floor(d / 365.25), m = Math.round((d - a * 365.25) / 30.4375);
+  if (m >= 12) { a++; m = 0; }
+  const ta = a === 1 ? "1 año" : `${a} años`;
+  return m ? `${ta} y ${m === 1 ? "1 mes" : `${m} meses`}` : ta;
+}
+export function tiempoHumano(dias: any) {
+  const d = Math.round(Number(dias) || 0);
+  if (d < 0) return `Vencido hace ${cantidadHumana(-d)}`;
+  if (d === 0) return "Hoy";
+  return `En ${cantidadHumana(d)}`;
+}
+export function textoCambio(dias: any) {
+  const d = Math.round(Number(dias) || 0);
+  return d > 0 ? `Requiere cambio en ${cantidadHumana(d)}` : d === 0 ? "Requiere cambio hoy" : `Cambio vencido hace ${cantidadHumana(-d)}`;
+}
+// ¿Este servicio es del mismo cliente que el cartucho? Por registro de origen si ambos lo tienen;
+// si no, por teléfono. El producto debe coincidir (comparación normalizada, no vacía).
+const productoIgual = (x: any, y: any) => { const a = norm(x), b = norm(y); return !!a && !!b && (a === b || a.includes(b) || b.includes(a)); };
+function mismoClienteYProducto(s: any, item: any) {
+  if (!productoIgual(s.producto, item.producto)) return false;
+  if (item.sourceRecordId != null && item.sourceRecordId !== "" && s.sourceRecordId != null && s.sourceRecordId !== "")
+    return String(s.sourceRecordId) === String(item.sourceRecordId) && String(s.sourceSection || "") === String(item.sourceSection || "")
+      && String(s.sourceRefIndex ?? "") === String(item.sourceRefIndex ?? "");
+  const t = digitos(item.telefono);
+  return t.length >= 7 && digitos(s.telefono) === t;
+}
+// Último CAMBIO registrado (servicio realizado o con venta) para ese cliente y producto, posterior a
+// la venta: desde ahí se recalcula el siguiente ciclo. Devuelve la fecha local o null.
+export function ultimoCambioCartucho(appts: any[], item: any, fechaVenta: any) {
+  const base = fechaLocal(fechaVenta);
+  let mejor: string | null = null;
+  (appts || []).forEach((s: any) => {
+    if (!esServicioHecho(s) || !mismoClienteYProducto(s, item)) return;
+    const f = serviceMetricDate(s);
+    if (f && (!base || f > base) && (!mejor || f > mejor)) mejor = f;
+  });
+  return mejor;
+}
+// ¿Ya hay un servicio PENDIENTE (agendado o reprogramado) para ese cambio?
+export const tieneServicioAgendado = (appts: any[], item: any) =>
+  (appts || []).some((s: any) => esServicioPendiente(s) && mismoClienteYProducto(s, item));
+// Alertas operativas: cambios a 15 días o menos (incluye vencidos) SIN servicio agendado.
+// Son derivadas: se mantienen mientras la condición siga y desaparecen solas al agendar,
+// reprogramar o registrar el cambio (que reinicia el ciclo).
+export function alertasCartucho(items: any[], appts: any[], dias = 15) {
+  return (items || [])
+    .filter((x: any) => Number(x.diasFaltan) <= dias && !tieneServicioAgendado(appts, x))
+    .map((x: any) => ({
+      id: `cartucho:${x.sourceSection || ""}:${x.sourceRecordId || digitos(x.telefono)}:${norm(x.producto)}`,
+      tipo: "cartucho", titulo: "Cambio de cartucho próximo",
+      detalle: `${x.nombre} — ${x.producto} · ${textoCambio(x.diasFaltan)}`,
+      seccion: "Servicios", diasFaltan: x.diasFaltan, persistente: true,
+    }));
+}
