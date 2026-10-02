@@ -19,8 +19,9 @@ import { CommandCenterV2 } from "./components/dashboard/CommandCenterV2";
 import { TIPOS_AGENDA_POR_ROL, PERIODO_LABEL, periodoSoportado } from "./services/commandCenter";
 import { enrichNewAppts, trazaRegistro } from "./services/apptTrace";
 import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEvento, fechaLocal as fechaLocalV2, reprogramarAntesDeVisita, reprogramarDesdeVisita, registrarResultado as registrarResultadoV2, cancelarCita as cancelarCitaV2, enFiltro, agendaCounters, isPastAppt, canRecordVisitResult, canHardDelete, duplicateApptCandidate, PALETA_TIPOS, COLOR_CANCELADA, isCancelled as isCancelledV2, colorBordeCita, ETIQUETA_TIPO, tipoOficial } from "./services/agendaV2";
-import { contarVentasDemosV2, serviceMetricDate, serviciosRealizados, ventaServicioCartucho, ventasServicioDe, apptsDelGrupo, servicioDesdeCartucho, duplicateServiceCandidate, candidatosServicio, estadoServicio, ESTADO_SERVICIO } from "./services/serviceV2";
+import { contarVentasDemosV2, serviceMetricDate, serviciosRealizados, ventaServicioCartucho, ventasServicioDe, apptsDelGrupo, ultimoCambioCartucho, tiempoHumano, alertasCartucho, servicioDesdeCartucho, duplicateServiceCandidate, candidatosServicio, estadoServicio, ESTADO_SERVICIO } from "./services/serviceV2";
 import { ServicioAccionesV2, ServiciosV2 } from "./components/servicio/ServicioV2";
+import { reconciliarDistribucionPorVenta } from "./services/ventaDistribucionV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
 import { RutasEquipoV2 } from "./components/rutas/RutasEquipoV2";
@@ -525,13 +526,17 @@ function proximoCambioCartucho(fechaVentaISO, meses, hoy=new Date()){
 function calcularCartuchos(flatClientes, appts, ventanaDias=30, hoy=new Date()){
   const out = [];
   // extra (v2): dirección y registro de origen SOLO cuando se conocen con certeza (nunca se inventan).
-  const push = (nombre, telefono, prodLabel, meses, fechaVenta, origen, extra={}) => {
-    if(!meses || meses<=0 || !fechaVenta) return;
+  const push = (nombre, telefono, prodLabel, meses, fechaVentaOriginal, origen, extra={}) => {
+    if(!meses || meses<=0 || !fechaVentaOriginal) return;
+    // v2: si ya se registró un CAMBIO (servicio realizado de ese cliente y producto), el siguiente
+    // ciclo se recalcula desde esa fecha. Legacy: siempre desde la venta.
+    const cambio = ACCESS_V2 ? ultimoCambioCartucho(appts, { nombre, telefono, producto:prodLabel, ...extra }, fechaVentaOriginal) : null;
+    const fechaVenta = cambio || fechaVentaOriginal;
     const prox = proximoCambioCartucho(fechaVenta, meses, hoy);
     if(!prox || !prox.fecha) return;
     const diasFaltan = Math.round((prox.fecha - hoy)/86400000);
     if(diasFaltan <= ventanaDias){ // próximos (≤ventana) o ya vencidos (negativo)
-      out.push({ nombre:nombre||"(Sin nombre)", telefono:telefono||"", producto:prodLabel||"", meses, fechaVenta, proxFecha:prox.fecha, diasFaltan, vencido:diasFaltan<0, origen, ...extra });
+      out.push({ nombre:nombre||"(Sin nombre)", telefono:telefono||"", producto:prodLabel||"", meses, fechaVenta, proxFecha:prox.fecha, diasFaltan, vencido:diasFaltan<0, origen, ...extra, ...(cambio?{ultimoCambio:cambio}:{}) });
     }
   };
   // Ventas registradas en el historial de los clientes
@@ -3849,7 +3854,7 @@ function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada, v2=null }) {
               {/* Servicio: botones de resultado directos (Se realizó / No se realizó) · v2: la MISMA tarjeta que la pestaña Servicio */}
               {esServicio && v2 ? (
                 <ServicioAccionesV2 s={a} autor={v2.autor} puedeGestionar={v2.puedeResultado} puedeBorrar={v2.puedeBorrar} appts={v2.appts}
-                  productos={PRODUCTOS_SERVICIO_V2} genId={genId} onUpdate={onUpdate} onCrear={v2.onCrear} onBorrar={onDelete} />
+                  productos={PRODUCTOS_SERVICIO_V2} genId={genId} onUpdate={onUpdate} onCrear={v2.onCrear} onBorrar={onDelete} onVenta={v2.onVenta} />
               ) : esServicio ? (
                 <>
                   {(!v2 || v2.puedeResultado) && <div className="grid grid-cols-2 gap-2 mb-2">
@@ -4892,7 +4897,7 @@ function CalendarioAgenda({ appts, onUpdate, onDelete, v2=null }) {
 
 // init (solo v2): {filtro, filtroTipo, filtroResultado, abrirTipo, abrirMenu} — llega desde el Centro de mando.
 // tiposPermitidos (solo v2): tipos de agenda que el rol puede crear. Sin estas props: igual que siempre.
-function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitidos=null, v2User=null, allData=null }) {
+function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitidos=null, v2User=null, allData=null, onVentaDistribucion=null }) {
   const [showForm,setShowForm]=useState(!!init?.abrirTipo);const [menuOpen,setMenuOpen]=useState(!!init?.abrirMenu);
   const [preType,setPreType]=useState(init?.abrirTipo||null);const [calLoading,setCalLoading]=useState(false);const [calMsg,setCalMsg]=useState("");
   // ── v2 (ACCESS_V2): lógica en services/agendaV2.ts ──
@@ -4903,6 +4908,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
   const [guardadaV2,setGuardadaV2]=useState(null);    // última cita guardada → Google / Apple Calendar
   const cfgV2=V2?{ autor:autorV2, puedeResultado:canRecordVisitResult(v2User.role), puedeBorrar:canHardDelete(v2User.role),
     appts, onCrear:(n)=>setAppts(p=>[n,...p]),   // servicio: mantenimiento futuro tras una venta
+    onVenta:onVentaDistribucion,                  // servicio: Venta → Distribución
     onReprogramarVisita:(a,fecha,nota)=>{
       const { original, nueva }=reprogramarDesdeVisita(a, fecha, nota, autorV2, new Date(), genId());
       setAppts(p=>[{...nueva,_type:"cita"}, ...p.map(x=>x.id===a.id?original:x)]);
@@ -8042,8 +8048,8 @@ function CartuchosServicioPanel({ allData, appts, setAppts, agente, notify, v2=f
                   <div className="text-xs text-slate-500 truncate mt-0.5"><Ico e="💧" className="mr-1.5" />{x.producto||"Filtro"}{x.telefono?` · 📞 ${x.telefono}`:""}</div>
                   <div className="text-xs mt-1">
                     {x.vencido
-                      ? <span className="font-black text-red-500"><Ico e="⚠" className="mr-1.5" />VENCIDO hace {Math.abs(x.diasFaltan)} día(s)</span>
-                      : <span className="font-black text-teal-600">En {x.diasFaltan} día(s)</span>} · 🗓️ {fFecha(x.proxFecha)} · <span className="text-slate-400">ciclo desde {x.fechaVenta?String(x.fechaVenta).slice(0,10):"—"}</span>
+                      ? <span className="font-black text-red-500"><Ico e="⚠" className="mr-1.5" />{v2 ? tiempoHumano(x.diasFaltan) : <>VENCIDO hace {Math.abs(x.diasFaltan)} día(s)</>}</span>
+                      : <span className="font-black text-teal-600">{v2 ? tiempoHumano(x.diasFaltan) : <>En {x.diasFaltan} día(s)</>}</span>} · 🗓️ {fFecha(x.proxFecha)} · <span className="text-slate-400">ciclo desde {x.fechaVenta?String(x.fechaVenta).slice(0,10):"—"}</span>
                   </div>
                 </div>
                 <div className="flex flex-col gap-1.5 shrink-0">
@@ -8735,9 +8741,17 @@ function AppRoot() {
   // historial; si no existe en ninguna base, creamos una tarjeta en Prospección.
   // El appt queda marcado _sincronizado para que NO se cuente doble (la venta
   // ya vive en el historial del cliente y la estadística sabe de qué base viene).
+  // v2 · Venta → Distribución: el cliente queda disponible en Distribución (crear o vincular,
+  // sin duplicar y sin mover/borrar el original). Solo staff (quien registra resultados).
+  const conDistribucionV2=(st, appt)=>{
+    if(!ACCESS_V2 || !v2User || !canRecordVisitResult(v2User.role)) return st;
+    const r=reconciliarDistribucionPorVenta(st.distribucion||[], appt);
+    return r.accion!=="sin_cambios" && r.accion!=="omitido" ? {...st, distribucion:r.lista} : st;
+  };
+  const asegurarDistribucionPorVenta=(appt)=>setState(s=>conDistribucionV2(s, appt));   // venta en SERVICIO
   const sincronizarVentaAgenda=(appt)=>{
     if(!appt || appt._sincronizado) return;
-    setState(s=>{
+    setState(s0=>{ const out=(s=>{
       const tel=soloNum(appt.telefono||"");
       const monto=Number(appt.monto)||0;
       const histEntry=makeHistorialEntry({ tipo:"cita", cita_resultado:"demo_venta", notas:`💰 Venta agendada en Agenda${appt.producto?` — ${appt.producto}`:""}`, agente:appt.agente||"", monto, producto:appt.producto||"", cartucho_meses:appt.cartucho_meses||0 });
@@ -8774,7 +8788,7 @@ function AppRoot() {
       }
       patch.appts=(s.appts||[]).map(a=>a.id===appt.id?{...a, _sincronizado:true, _clienteId:encontradoId, _clienteGrupo:grupo}:a);
       return {...s, ...patch};
-    });
+    })(s0); return conDistribucionV2(out, appt); });   // v2: + Distribución (legacy: sin cambios)
   };
   const onCallLog=()=>{const today=hoyLocal();const ag=agenteActivo||"Equipo";setState(s=>{const dia=clObj((s.callLog||{})[today]);return {...s,callLog:{...(s.callLog||{}),[today]:{...dia,[ag]:(+dia[ag]||0)+1}}};});};
   // navegación rápida desde el dashboard
@@ -8798,6 +8812,7 @@ function AppRoot() {
     const sec=(n.seccion||"").toLowerCase();
     let destino="inicio";
     if(n.tipo==="resultado") destino="agenda";                    // resultado de cita → Agenda
+    else if(ACCESS_V2 && n.tipo==="cartucho") destino="servicio";  // v2: alerta de cartucho → Servicio
     else if(sec.includes("agregados")) destino="agregados";
     else if(sec.includes("prospec")) destino="prospectos";
     else if(sec.includes("distribuci")) destino="distribucion";
@@ -8812,6 +8827,15 @@ function AppRoot() {
   // Sin esto, cada toque recreaba el objeto y rompía la memoización aguas abajo.
   const allData=useMemo(()=>({agregados:state.agregados||[],referidos:state.referidos||[],prospectos:state.prospectos||[],distribucion:state.distribucion||[], appts:state.appts||[]}),
     [state.agregados, state.referidos, state.prospectos, state.distribucion, state.appts]);
+  // v2 · Alertas operativas de Cartuchos y filtros: cambios a 15 días o menos (o vencidos) SIN
+  // servicio agendado. Derivadas (no se guardan): se mantienen hasta que el cambio se agenda,
+  // se reprograma o se registra (lo que reinicia el ciclo). Solo para quien gestiona Servicio.
+  const alertasCart=useMemo(()=>{
+    if(!ACCESS_V2 || !v2User || !canTab("servicio")) return [];
+    const flat=["agregados","prospectos","distribucion","referidos"].flatMap(sec=>(state[sec]||[]).filter(c=>c&&!c.eliminado).map(c=>({...c,_sec:sec})));
+    const ahora=new Date().toISOString();
+    return alertasCartucho(calcularCartuchos(flat, state.appts||[], 15), state.appts||[], 15).map(a=>({...a, fecha:ahora, agente:"", leidoPor:[]}));
+  },[state.agregados, state.prospectos, state.distribucion, state.referidos, state.appts, v2User?.uid, v2User?.role]);
   const [importMsg,setImportMsg]=useState("");
   const [dupReview,setDupReview]=useState(null);  // {dest, fresh:[], dups:[]}
   const [refReview,setRefReview]=useState(null);  // referidos a revisar/editar antes de guardar
@@ -9125,9 +9149,9 @@ function AppRoot() {
           <button onClick={()=>setShowNotifs(p=>!p)} aria-label="Notificaciones"
             className="relative flex items-center justify-center w-9 h-9 rounded-xl text-slate-600 hover:bg-slate-100 transition">
             <Ico e="🔔" size={19} />
-            {noLeidas>0 && (
+            {(noLeidas+alertasCart.length)>0 && (
               <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-[#2563EB] border border-white text-white text-[9px] font-black flex items-center justify-center">
-                {noLeidas>9?"9+":noLeidas}
+                {(noLeidas+alertasCart.length)>9?"9+":(noLeidas+alertasCart.length)}
               </span>
             )}
           </button>
@@ -9145,7 +9169,7 @@ function AppRoot() {
             {tab==="inicio" && ACCESS_V2 && v2User && <CommandCenterV2 user={v2User} state={state} appts={state.appts||[]} callLog={state.callLog||{}} contarVentasDemos={contarVentasDemos} canTab={canTab}
               irA={(t,intent)=>{ setNavIntent(intent?{...intent,tab:t,key:Date.now()}:null); goTo(t); }} />}
             {tab==="inicio" && !(ACCESS_V2 && v2User) && <Dashboard allData={allData} appts={state.appts||[]} setAppts={setAppts} callLog={state.callLog} agente={agenteActivo} goTo={goTo} incentivos={state.incentivos||[]} cofreConfig={state.cofreConfig} cofreAperturas={state.cofreAperturas||[]} abrirCofre={abrirCofre} rolActivo={rolUsuario} respaldos={state.respaldos||[]} registrarRespaldo={registrarRespaldo} cumpleanos={state.cumpleanos||[]} />}
-            {tab==="agenda" && <Agenda key={ACCESS_V2?(navIntent?.key||"agenda"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} onVentaSync={sincronizarVentaAgenda} {...(ACCESS_V2&&v2User?{v2User, allData:state}:{})}
+            {tab==="agenda" && <Agenda key={ACCESS_V2?(navIntent?.key||"agenda"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} onVentaSync={sincronizarVentaAgenda} {...(ACCESS_V2&&v2User?{v2User, allData:state, onVentaDistribucion:asegurarDistribucionPorVenta}:{})}
               init={ACCESS_V2 && navIntent?.tab==="agenda" ? navIntent : null}
               tiposPermitidos={ACCESS_V2 && v2User ? TIPOS_AGENDA_POR_ROL[v2User.role] : null} />}
             {tab==="llamadas" && ACCESS_V2 && v2User && especialidadDe(v2User.role) && <CallCenterV2 user={v2User} esp={especialidadDe(v2User.role)} state={state}
@@ -9170,7 +9194,7 @@ function AppRoot() {
             {tab==="servicio" && (ACCESS_V2 && v2User
               ? <ServiciosV2 key={navIntent?.key||"servicio"} appts={state.appts||[]} setAppts={setAppts} autor={{uid:v2User.uid, nombre:v2User.nombre}}
                   puedeGestionar={canRecordVisitResult(v2User.role)} puedeBorrar={canHardDelete(v2User.role)} productos={PRODUCTOS_SERVICIO_V2} genId={genId}
-                  init={navIntent?.tab==="servicio" ? navIntent : null}
+                  init={navIntent?.tab==="servicio" ? navIntent : null} onVenta={asegurarDistribucionPorVenta}
                   renderCartuchos={()=><CartuchosServicioPanel v2 allData={allData||{}} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} notify={notify} />} />
               : <ServicioSection key={ACCESS_V2?(navIntent?.key||"servicio"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} notify={notify} allData={allData}
               init={ACCESS_V2 && navIntent?.tab==="servicio" ? navIntent : null} />)}
@@ -9282,7 +9306,7 @@ function AppRoot() {
           </div>
         </div>
       </Modal>}
-      {showNotifs && <NotifPanel notifs={notifs} agenteActivo={agenteActivo} onClose={()=>setShowNotifs(false)} onMarcarLeidas={()=>{marcarLeidas();setShowNotifs(false);}} onNotifClick={handleNotifClick} onLimpiar={()=>{ if(confirm("¿Borrar todas las notificaciones? (no afecta clientes ni datos)")){ setState(s=>({...s,notificaciones:[]})); setShowNotifs(false); } }} />}
+      {showNotifs && <NotifPanel notifs={ACCESS_V2&&alertasCart.length?[...alertasCart,...notifs]:notifs} agenteActivo={agenteActivo} onClose={()=>setShowNotifs(false)} onMarcarLeidas={()=>{marcarLeidas();setShowNotifs(false);}} onNotifClick={handleNotifClick} onLimpiar={()=>{ if(confirm("¿Borrar todas las notificaciones? (no afecta clientes ni datos)")){ setState(s=>({...s,notificaciones:[]})); setShowNotifs(false); } }} />}
     </div>
   );
 }
