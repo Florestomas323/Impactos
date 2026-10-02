@@ -166,6 +166,10 @@ export function freshEngine(section: Section, id: string, ctx: Ctx): any {
 function toDoc(section: Section, appRec: any, current: any, ctx: Ctx, docId: string, d0: Docs = emptyDocs()): any {
   const engine = current ? pickEngine(current) : freshEngine(section, docId, ctx);
   let out: any = { ...clean(appRec), ...engine, id: docId, appId: ctx.appId, section };
+  // v2 · Venta → Distribución: el registro nuevo conserva a quien consiguió la cita/venta
+  // (createdByUid original). Solo al CREAR, solo staff y solo para ese origen. Las Rules de
+  // records no dan lectura por createdByUid, así que no amplía la visibilidad de nadie.
+  if (!current && isStaff(ctx) && appRec?.createdFrom === "venta_distribucion" && appRec?.createdByUid) out.createdByUid = appRec.createdByUid;
   if (section === "cobranza") {
     const clave = current?.legacyId ?? String(docId).replace(/^cob_/, "");
     out.legacyId = clave;
