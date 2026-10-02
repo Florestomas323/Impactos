@@ -175,10 +175,11 @@ test("Ningún rol recibe acceso por un botón del dashboard a una pestaña que c
     assert.ok(visibles.length > 0, role);
   }
 });
-test("Supervisor: sin Servicios ni Reclutamiento en su dashboard (sus permisos actuales)", () => {
+test("Supervisor: ve Servicios (Servicio r1: servicios.manage) pero no Reclutamiento en su dashboard", () => {
   const canTab = (t: string) => canViewTab(U("supervisor"), t);
   const vis = KEYS_POR_ROL.supervisor.filter((k) => accesible(k, canTab));
-  ["serviciosHoy", "serviciosPendientes", "entrevistasHoy", "entrevistasPendientes"].forEach((k) => assert.ok(!vis.includes(k), k));
+  ["serviciosHoy", "serviciosPendientes"].forEach((k) => assert.ok(vis.includes(k), k));
+  ["entrevistasHoy", "entrevistasPendientes"].forEach((k) => assert.ok(!vis.includes(k), k));
   ["visitasHoy", "agendar", "fVisitas", "fDemos", "fVentas", "fVolumen", "visitasManana", "seguimientosVencidos", "frescosSinAsignar", "cargaEquipo"].forEach((k) => assert.ok(vis.includes(k), k));
   // Distribuidor y Súper Admin sí ven las 4 tarjetas
   for (const role of ["distribuidor", "super_admin"]) {
