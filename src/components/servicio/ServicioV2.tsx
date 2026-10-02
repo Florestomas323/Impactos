@@ -6,7 +6,8 @@ import { mapsLink, fechaLocal, localDateTimeValue, PALETA_TIPOS, COLOR_CANCELADA
 import {
   estadoServicio, ESTADO_SERVICIO, serviceReadOnly, registrarResultadoServicio, registrarVentaServicio,
   reprogramarServicio, cancelarServicio, notaServicio, mantenimientoDesdeServicio, duplicateServiceCandidate,
-  enFiltroServicio, serviceCounters, esServicio, type FiltroServicio,
+  enFiltroServicio, serviceCounters, esServicio, cancelarMantenimientosDe, corregirResultadoServicio, requiereConfirmacion,
+  resumenResultado, resumenNuevo, type FiltroServicio, type NuevoResultado,
 } from "../../services/serviceV2";
 
 const btn = "text-xs font-bold py-2 px-3 rounded-lg";
@@ -30,18 +31,43 @@ export function ServicioAccionesV2({ s, autor, puedeGestionar, puedeBorrar, appt
   const [nota, setNota] = useState("");
   const [mant, setMant] = useState<any>(null);     // {m, dup} mantenimiento con posible duplicado
   const [enviado, setEnviado] = useState(false);   // evita dobles toques en un resultado
+  const [confirmar, setConfirmar] = useState<NuevoResultado | null>(null);   // corrección pendiente de confirmar
   const est = estadoServicio(s), info = ESTADO_SERVICIO[est], cerrado = serviceReadOnly(s), cancelado = est === "cancelado";
   const maps = mapsLink(s);
-  const resultado = (r: "realizado" | "no_recibio" | "no_visito") => { if (enviado) return; setEnviado(true); onUpdate(registrarResultadoServicio(s, r, autor)); setPaso(""); };
+  // Corregir una VENTA: sus mantenimientos automáticos dejan de corresponder → se cancelan (con trazabilidad).
+  const cancelarMantAnteriores = () => (est === "venta" ? cancelarMantenimientosDe(appts || [], s.id, autor) : []);
+  const corrigiendo = requiereConfirmacion(s);       // ya tiene resultado final → corregir exige confirmación
+  // Guarda un resultado. Si es CORRECCIÓN, NO guarda: primero pide confirmación explícita.
+  const resultado = (r: "realizado" | "no_recibio" | "no_visito") => {
+    if (enviado) return;
+    if (corrigiendo) { setConfirmar({ resultado: r }); return; }
+    setEnviado(true);
+    onUpdate(registrarResultadoServicio(s, r, autor)); setPaso("");
+  };
   const registrarVenta = () => {
     if (enviado || !venta.prod) return;
-    setEnviado(true);
     const [label, ms] = venta.prod.split("|"); const meses = Number(ms) || 0;
-    const u = registrarVentaServicio(s, { monto: venta.monto, producto: label }, autor);
+    if (corrigiendo) { setConfirmar({ resultado: "venta", monto: venta.monto, producto: label, meses }); return; }
+    setEnviado(true);
+    const u = registrarVentaServicio(s, { monto: venta.monto, producto: label, meses }, autor);
     onUpdate(u); setPaso("");
+    crearMantenimiento(u, label, meses, []);
+  };
+  // Confirmar corrección: resultado limpio + historial marcado + mantenimientos de la venta anterior cancelados.
+  const confirmarCorreccion = () => {
+    if (!confirmar || enviado) return;
+    setEnviado(true);
+    const cancelados = cancelarMantAnteriores();
+    const u = corregirResultadoServicio(s, confirmar, autor);
+    onUpdate(u); cancelados.forEach((x: any) => onUpdate(x));
+    if (confirmar.resultado === "venta") crearMantenimiento(u, confirmar.producto || "", Number(confirmar.meses) || 0, cancelados);
+    setConfirmar(null); setPaso("");
+  };
+  const crearMantenimiento = (u: any, label: string, meses: number, cancelados: any[]) => {
     if (meses > 0 && onCrear) {
       const m = mantenimientoDesdeServicio(u, { producto: label, meses }, new Date(), genId());
-      const dup = duplicateServiceCandidate(appts || [], m, 7);
+      const vigentes = (appts || []).map((x: any) => cancelados.find((c: any) => c.id === x.id) || x);
+      const dup = duplicateServiceCandidate(vigentes, m, 7);
       if (dup) setMant({ m, dup }); else onCrear(m);
     }
   };
@@ -61,7 +87,23 @@ export function ServicioAccionesV2({ s, autor, puedeGestionar, puedeBorrar, appt
         {s.telefono && <a href={wa(s.telefono)} target="_blank" rel="noreferrer" className={`${btn} bg-[#e9f9ef] text-[#15803d]`}>WhatsApp</a>}
         {maps && <a href={maps} target="_blank" rel="noreferrer" className={`${btn} bg-[#f4f6f9] text-slate-700`}>Cómo llegar</a>}
       </div>
-      {mostrarResultados && (
+      {paso === "corregir" && corrigiendo && !confirmar && (
+        <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800">
+          <b>Estás corrigiendo un resultado ya registrado.</b>
+          {estadoServicio(s) === "venta" && <div className="mt-0.5">Esto modificará las métricas de venta y volumen.</div>}
+        </div>
+      )}
+      {confirmar && (
+        <div className="p-3 rounded-xl bg-white border-2 border-amber-300 space-y-2 text-sm">
+          <div><span className="text-[11px] font-bold text-slate-500 uppercase">Resultado actual</span><div className="font-bold text-slate-800">{resumenResultado(s)}</div></div>
+          <div><span className="text-[11px] font-bold text-slate-500 uppercase">Nuevo resultado</span><div className="font-bold text-slate-800">{resumenNuevo(confirmar)}</div></div>
+          <div className="flex gap-2">
+            <button onClick={() => setConfirmar(null)} className="flex-1 text-sm font-bold py-2.5 rounded-lg bg-[#f4f6f9] text-slate-700">Volver</button>
+            <button disabled={enviado} onClick={confirmarCorreccion} className="flex-1 text-sm font-bold py-2.5 rounded-lg text-white disabled:opacity-40" style={{ background: "#d97706" }}>Confirmar corrección</button>
+          </div>
+        </div>
+      )}
+      {mostrarResultados && !confirmar && (
         <div className="grid grid-cols-2 gap-2">
           <button disabled={enviado} onClick={() => resultado("realizado")} className={`${btn} py-2.5 text-emerald-700 bg-emerald-50 disabled:opacity-40`}>Servicio realizado</button>
           <button disabled={enviado} onClick={() => setPaso(paso === "venta" ? "" : "venta")} className={`${btn} py-2.5 text-white disabled:opacity-40`} style={{ background: "#047857" }}>Venta durante servicio</button>
@@ -69,7 +111,7 @@ export function ServicioAccionesV2({ s, autor, puedeGestionar, puedeBorrar, appt
           <button disabled={enviado} onClick={() => resultado("no_visito")} className={`${btn} py-2.5 text-white disabled:opacity-40`} style={{ background: "#7C3AED" }}>No se visitó</button>
         </div>
       )}
-      {paso === "venta" && (
+      {paso === "venta" && !confirmar && (
         <div className="p-2.5 rounded-xl border border-emerald-200 bg-emerald-50 space-y-2">
           <select value={venta.prod} onChange={(e) => setVenta({ ...venta, prod: e.target.value })} className="w-full border border-emerald-300 rounded-lg px-2 py-2 text-sm bg-white font-bold text-slate-800">
             <option value="">Producto vendido…</option>
