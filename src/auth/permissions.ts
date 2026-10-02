@@ -30,6 +30,7 @@ export const PERMISSIONS: Record<Role, string[]> = {
     "agenda.manage", "equipo.view", "asignaciones.manage", "estadisticas.view",
     "notas.create", "exportar", "incentivos.manage", "catalogo.view", "catalogo.edit", "config.view",
     "datos.herramientas",
+    "servicios.manage",   // Servicio: mismos permisos operativos que distribuidor/súper admin (solo este módulo)
   ],
 
   telemarketing_ventas: [
