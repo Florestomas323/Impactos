@@ -6,6 +6,7 @@
 import { asList, wasWorked, deriveWorkStatus } from "./assignments";
 import { esCitaDe } from "./apptTrace";
 import { diaLocal as diaCitaLocal } from "./agendaV2";
+import { esServicioPendiente } from "./serviceV2";
 
 // ── Resultados de cita ──────────────────────────────────────────────────────
 // Visita REALIZADA = se fue físicamente al domicilio.
@@ -66,7 +67,8 @@ export function staffResumen(state: any, appts: any[], now = new Date()) {
       visitasManana: A.filter((a: any) => tipoAppt(a) === "cita" && diaAppt(a) === manana).length,
       seguimientosVencidos: comerciales.filter((c: any) => c.proximo_seguimiento && c.proximo_seguimiento < hoy).length,
       frescosSinAsignar: registros.filter((r: any) => !r.assignedTo && deriveWorkStatus(r) === "fresh").length,
-      serviciosPendientes: A.filter((a: any) => tipoAppt(a) === "servicio" && !["realizado", "no_realizado"].includes(a.servicioResultado || "")).length,
+      // Pendiente = servicio activo sin resultado final (realizado, venta, no recibió, no se visitó cierran).
+      serviciosPendientes: A.filter((a: any) => esServicioPendiente(a)).length,
       entrevistasPendientes: entrevistas.filter((r: any) => diaEnt(r) >= hoy && !r.entrevistado).length,
       asignados: asignados.length,
       personasConDatos: new Set(asignados.map((r: any) => r.assignedTo)).size,
