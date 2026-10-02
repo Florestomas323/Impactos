@@ -32,6 +32,11 @@ export const esServicioPendiente = (a: any) => esServicio(a) && estadoServicio(a
 export const esServicioHecho = (a: any) => esServicio(a) && ["realizado", "venta"].includes(estadoServicio(a));
 export const esServicioNoRealizado = (a: any) => esServicio(a) && ["no_recibio", "no_visito", "no_realizado"].includes(estadoServicio(a));
 export const esVentaServicio = (a: any) => esServicio(a) && estadoServicio(a) === "venta";
+// Quién REALIZÓ/registró el resultado del servicio: identidad principal para atribuir la venta.
+// Legacy sin resultByName → agente. Sin ninguno → "" (no se atribuye a nadie).
+export const responsableServicio = (a: any) => String(a?.resultByName || a?.agente || "");
+// ¿Este servicio se atribuye a esa persona? Sin filtro de persona → sí.
+export const servicioDe = (a: any, persona: any) => !persona || responsableServicio(a) === String(persona);
 // Servicio cerrado: tiene resultado final (o está cancelado) → sin Reprogramar / Cancelar.
 export const serviceReadOnly = (a: any) => estadoServicio(a) !== "pendiente";
 // Fecha REAL para métricas de resultado: cuándo se marcó (fallback legacy: la fecha programada).
@@ -85,18 +90,49 @@ export function registrarResultadoServicio(a: any, resultado: "realizado" | "no_
     actualizado: now.toISOString(),
   };
   delete out.monto;                                       // si se corrige una venta, deja de sumar volumen
+  delete out.cartucho_meses;                              // …y deja de generar cambios de cartucho
   return out;
 }
 // Venta durante el servicio: VENTA + VOLUMEN + SERVICIO REALIZADO, nunca DEMO.
-export function registrarVentaServicio(a: any, { monto, producto }: { monto?: any; producto?: string }, autor: Autor, now: Date = new Date()) {
-  const m = Number(monto) || 0, prod = producto || a.producto || "";
+export function registrarVentaServicio(a: any, { monto, producto, meses }: { monto?: any; producto?: string; meses?: any }, autor: Autor, now: Date = new Date()) {
+  const m = Number(monto) || 0, prod = producto || a.producto || "", ms = Number(meses) || 0;
+  const base: any = { ...a };
+  if (ms > 0) base.cartucho_meses = ms; else delete base.cartucho_meses;   // ciclo de cambio de cartucho/filtro
   return {
-    ...a, servicioResultado: "venta", resultado: "venta_servicio", venta: true, monto: m, producto: prod,
+    ...base, servicioResultado: "venta", resultado: "venta_servicio", venta: true, monto: m, producto: prod,
     resultByUid: autor.uid, resultByName: autor.nombre, resultAt: now.toISOString(),
     servicioHistorial: [...lst(a.servicioHistorial), entradaHist("venta", autor, now, { monto: m, producto: prod })],
     actualizado: now.toISOString(),
   };
 }
+// ── Corregir un resultado YA registrado (explícito, con confirmación en la UI) ──
+// Requiere confirmación: el servicio tiene resultado final y no está cancelado.
+export const requiereConfirmacion = (a: any) => serviceReadOnly(a) && !isCancelled(a);
+const dinero = (n: any) => "$" + (Number(n) || 0).toLocaleString("en-US");
+// "Venta · $1,800" · "No recibió" … (para la confirmación)
+export function resumenResultado(a: any) {
+  const e = estadoServicio(a);
+  return e === "venta" ? `Venta · ${dinero(a.monto)}${a.producto ? ` · ${a.producto}` : ""}` : ESTADO_SERVICIO[e].label;
+}
+export type NuevoResultado = { resultado: "realizado" | "no_recibio" | "no_visito" | "venta"; monto?: any; producto?: string; meses?: any };
+export function resumenNuevo(n: NuevoResultado) {
+  return n.resultado === "venta" ? `Venta · ${dinero(n.monto)}${n.producto ? ` · ${n.producto}` : ""}` : ESTADO_SERVICIO[n.resultado].label;
+}
+// El documento queda LIMPIO con el resultado nuevo (Venta → No recibió: sin monto, venta:false,
+// sin cartucho_meses) y el historial conserva la venta anterior + una entrada marcada como corrección.
+export function corregirResultadoServicio(a: any, nuevo: NuevoResultado, autor: Autor, now: Date = new Date()) {
+  const previo = estadoServicio(a);
+  const out: any = nuevo.resultado === "venta"
+    ? registrarVentaServicio(a, nuevo, autor, now)
+    : registrarResultadoServicio(a, nuevo.resultado, autor, now);
+  const hist = [...out.servicioHistorial];
+  hist[hist.length - 1] = {
+    ...hist[hist.length - 1], correction: true, previousResult: previo,
+    ...(previo === "venta" ? { previousMonto: Number(a.monto) || 0, ...(a.producto ? { previousProducto: a.producto } : {}) } : {}),
+  };
+  return { ...out, servicioHistorial: hist };
+}
+
 // Reprogramar: MISMA cita, nueva fecha, historial (reprogramHistory de Agenda). Queda pendiente.
 export function reprogramarServicio(a: any, nuevaFecha: string, autor: Autor, now: Date = new Date()) {
   return { ...reprogramarAntesDeVisita(a, nuevaFecha, autor, now), servicioResultado: "pendiente" };
@@ -152,6 +188,14 @@ export function mantenimientoDesdeServicio(sv: any, { producto, meses }: { produ
   };
 }
 
+// Mantenimientos AUTOMÁTICOS creados por la venta de ese servicio y aún activos.
+export const mantenimientosDe = (appts: any[], servId: any) => (appts || []).filter((x: any) =>
+  x && x.createdFrom === "service_maintenance" && String(x.maintenanceFromApptId) === String(servId) && estadoServicio(x) === "pendiente");
+// Al corregir una venta (a otro resultado o a otra venta), esos mantenimientos dejan de
+// corresponder: se CANCELAN con trazabilidad (no se borran).
+export const cancelarMantenimientosDe = (appts: any[], servId: any, autor: Autor, now: Date = new Date()) =>
+  mantenimientosDe(appts, servId).map((x: any) => cancelarServicio(x, autor, now, "Venta corregida en el servicio de origen"));
+
 // ── Servicio desde Cartuchos y filtros ───────────────────────────────────────
 // Usa el registro de origen SOLO si calcularCartuchos lo trae (nunca se inventa).
 export function servicioDesdeCartucho(x: any, now: Date, id: any) {
@@ -183,28 +227,41 @@ export function candidatosServicio(allData: any) {
 //   servicio legacy + demo_venta/venta → Venta + Volumen, NO Demo
 //   servicio sin venta               → nada aquí (se cuenta como servicio)
 //   cancelados                       → nada
+//   % cierre = ventas ORIGINADAS EN DEMO ÷ demos (las ventas de servicio no inflan el cierre).
+//   Persona (agente): servicio → responsableServicio (resultByName; legacy: agente; vacío: nadie);
+//   cita → la regla legacy de siempre.
 export function contarVentasDemosV2({ appts = [], clientes = [], enP = (_f: any) => true, agente = "" }: any = {}) {
-  let demos = 0, ventas = 0, volumen = 0;
+  let demos = 0, ventas = 0, volumen = 0, ventasDemo = 0;
   (appts || []).forEach((a: any) => {
     if (!a || a._sincronizado || isCancelled(a)) return;
-    if (agente && a.agente && a.agente !== agente) return;
     if (esServicio(a)) {
-      if (esVentaServicio(a) && enP(serviceMetricDate(a))) { ventas++; volumen += Number(a.monto) || 0; }
+      if (esVentaServicio(a) && servicioDe(a, agente) && enP(serviceMetricDate(a))) { ventas++; volumen += Number(a.monto) || 0; }
       return;
     }
+    if (agente && a.agente && a.agente !== agente) return;
     if (!enP(a.fecha)) return;
-    if (a.resultado === "demo_venta" || a.resultado === "venta") { ventas++; demos++; volumen += Number(a.monto) || 0; }
+    if (a.resultado === "demo_venta" || a.resultado === "venta") { ventas++; ventasDemo++; demos++; volumen += Number(a.monto) || 0; }
     else if (a.resultado === "demo_no_venta" || a.resultado === "no_venta") { demos++; }
   });
   (clientes || []).forEach((c: any) => lst(c?.historial).forEach((h: any) => {
     if (!h || !enP(h.fecha)) return;
     if (agente && h.agente && h.agente !== agente) return;
     if (h.cita_resultado === "venta_servicio") { ventas++; volumen += Number(h.monto) || 0; return; }
-    if (h.cita_resultado === "demo_venta" || h.cita_resultado === "venta") { ventas++; demos++; volumen += Number(h.monto) || 0; }
+    if (h.cita_resultado === "demo_venta" || h.cita_resultado === "venta") { ventas++; ventasDemo++; demos++; volumen += Number(h.monto) || 0; }
     else if (h.cita_resultado === "demo_no_venta" || h.cita_resultado === "no_venta") { demos++; }
   }));
-  return { demos, ventas, volumen, cierre: demos > 0 ? Math.round((ventas / demos) * 100) : 0 };
+  return { demos, ventas, volumen, cierre: demos > 0 ? Math.round((ventasDemo / demos) * 100) : 0 };
 }
+// Ventas de servicio que cuentan para una persona (racha, semana del agente, incentivos):
+// activas, no sincronizadas y registradas por ella (resultByName; legacy: agente).
+export const ventasServicioDe = (appts: any[], persona: any) =>
+  (appts || []).filter((a: any) => a && esVentaServicio(a) && !isCancelled(a) && !a._sincronizado && servicioDe(a, persona));
+// Citas y servicios ligados a un GRUPO (sección) por su registro de origen. Sin source → ningún grupo.
+export const apptsDelGrupo = (appts: any[], seccion: string) =>
+  (appts || []).filter((a: any) => a && a.sourceSection != null && a.sourceSection === seccion);
+// Venta de servicio con ciclo de cartucho → datos para Cartuchos y filtros (fecha REAL local).
+export const ventaServicioCartucho = (a: any) =>
+  esVentaServicio(a) && !isCancelled(a) && Number(a.cartucho_meses) > 0 ? { fechaVenta: serviceMetricDate(a), meses: Number(a.cartucho_meses) } : null;
 // Servicios REALIZADOS (realizado + venta) atribuidos a la fecha real del resultado.
 export const serviciosRealizados = (appts: any[], enP: (f: string) => boolean) =>
   (appts || []).filter((a) => esServicioHecho(a) && enP(serviceMetricDate(a))).length;
