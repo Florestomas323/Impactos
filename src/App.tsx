@@ -19,6 +19,8 @@ import { CommandCenterV2 } from "./components/dashboard/CommandCenterV2";
 import { TIPOS_AGENDA_POR_ROL, PERIODO_LABEL, periodoSoportado } from "./services/commandCenter";
 import { enrichNewAppts, trazaRegistro } from "./services/apptTrace";
 import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEvento, fechaLocal as fechaLocalV2, reprogramarAntesDeVisita, reprogramarDesdeVisita, registrarResultado as registrarResultadoV2, cancelarCita as cancelarCitaV2, enFiltro, agendaCounters, isPastAppt, canRecordVisitResult, canHardDelete, duplicateApptCandidate, PALETA_TIPOS, COLOR_CANCELADA, isCancelled as isCancelledV2, colorBordeCita, ETIQUETA_TIPO, tipoOficial } from "./services/agendaV2";
+import { contarVentasDemosV2, esVentaServicio as esVentaServicioV2, serviceMetricDate, serviciosRealizados, servicioDesdeCartucho, duplicateServiceCandidate, candidatosServicio, estadoServicio, ESTADO_SERVICIO } from "./services/serviceV2";
+import { ServicioAccionesV2, ServiciosV2 } from "./components/servicio/ServicioV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
 import { RutasEquipoV2 } from "./components/rutas/RutasEquipoV2";
@@ -462,6 +464,8 @@ const RESULTADO_STYLE = {
 // ─── PRODUCTOS VENDIDOS + CAMBIO DE CARTUCHO ──────────────────
 // Catálogo de productos. "Filtros de agua" tiene sub-opciones con
 // el tiempo (en meses) en que toca cambiar el cartucho.
+// v2: lista plana de productos para la venta durante un servicio (misma fuente que PRODUCTOS_VENTA).
+const productosPlanos = () => PRODUCTOS_VENTA.flatMap(p=>p.sub?p.sub.map(sb=>({label:sb.label,meses:sb.meses||0})):[{label:p.label,meses:p.meses||0}]);
 const PRODUCTOS_VENTA = [
   { id:"cocina",      ico:"🍳", label:"Sistema de cocina" },
   { id:"electronico", ico:"📺", label:"Electrónico" },
@@ -478,6 +482,7 @@ const PRODUCTOS_VENTA = [
   { id:"premios",   ico:"🎁", label:"Premios" },
   { id:"repuestos", ico:"🔩", label:"Repuestos" },
 ];
+const PRODUCTOS_SERVICIO_V2 = productosPlanos();
 // Resuelve producto+sub a { label, meses }. meses>0 ⇒ genera recordatorio de mantenimiento.
 function resolveProducto(prodId, subId){
   const p = PRODUCTOS_VENTA.find(x=>x.id===prodId);
@@ -519,27 +524,31 @@ function proximoCambioCartucho(fechaVentaISO, meses, hoy=new Date()){
 // cambios de cartucho próximos o vencidos (dentro de la ventana de aviso).
 function calcularCartuchos(flatClientes, appts, ventanaDias=30, hoy=new Date()){
   const out = [];
-  const push = (nombre, telefono, prodLabel, meses, fechaVenta, origen) => {
+  // extra (v2): dirección y registro de origen SOLO cuando se conocen con certeza (nunca se inventan).
+  const push = (nombre, telefono, prodLabel, meses, fechaVenta, origen, extra={}) => {
     if(!meses || meses<=0 || !fechaVenta) return;
     const prox = proximoCambioCartucho(fechaVenta, meses, hoy);
     if(!prox || !prox.fecha) return;
     const diasFaltan = Math.round((prox.fecha - hoy)/86400000);
     if(diasFaltan <= ventanaDias){ // próximos (≤ventana) o ya vencidos (negativo)
-      out.push({ nombre:nombre||"(Sin nombre)", telefono:telefono||"", producto:prodLabel||"", meses, fechaVenta, proxFecha:prox.fecha, diasFaltan, vencido:diasFaltan<0, origen });
+      out.push({ nombre:nombre||"(Sin nombre)", telefono:telefono||"", producto:prodLabel||"", meses, fechaVenta, proxFecha:prox.fecha, diasFaltan, vencido:diasFaltan<0, origen, ...extra });
     }
   };
   // Ventas registradas en el historial de los clientes
   (flatClientes||[]).forEach(c=>{
     lst(c.historial).forEach(h=>{
       if((h.cita_resultado==="demo_venta"||h.cita_resultado==="venta") && h.cartucho_meses>0){
-        push(c.nombre||c.anfitrion, c.telefono||c.anfitrion_telefono, h.producto, h.cartucho_meses, h.fecha, "cliente");
+        push(c.nombre||c.anfitrion, c.telefono||c.anfitrion_telefono, h.producto, h.cartucho_meses, h.fecha, "cliente",
+          c._sec ? { sourceSection:c._sec, sourceRecordId:String(c.id), direccion:c.direccion||"", ciudad:c.ciudad||"", cp:c.cp||"" } : {});
       }
     });
   });
   // Ventas registradas en citas de la agenda
   (appts||[]).forEach(a=>{
     if((a.resultado==="demo_venta"||a.resultado==="venta") && a.cartucho_meses>0){
-      push(a.nombre, a.telefono, a.producto, a.cartucho_meses, a.fecha, "agenda");
+      push(a.nombre, a.telefono, a.producto, a.cartucho_meses, a.fecha, "agenda",
+        { ...(a.sourceRecordId!=null&&a.sourceRecordId!==""?{ sourceSection:a.sourceSection, sourceRecordId:String(a.sourceRecordId), ...(a.sourceRefIndex!=null?{sourceRefIndex:a.sourceRefIndex}:{}) }:{}),
+          ...(a.direccion?{direccion:a.direccion}:{}), ...(a.ciudad?{ciudad:a.ciudad}:{}), ...(a.cp?{cp:a.cp}:{}) });
     }
   });
   return out.sort((x,y)=>x.proxFecha - y.proxFecha);
@@ -554,6 +563,8 @@ function calcularCartuchos(flatClientes, appts, ventanaDias=30, hoy=new Date()){
 //   enP      = (fechaISO)=>bool → ¿la fecha cae en el periodo?
 //   agente   = (opcional) cuenta solo lo registrado por ese agente
 function contarVentasDemos({ appts=[], clientes=[], enP=()=>true, agente="" }={}){
+  // v2: regla central de services/serviceV2.ts — una venta durante un SERVICIO es venta + volumen, nunca demo.
+  if(ACCESS_V2) return contarVentasDemosV2({ appts, clientes, enP, agente });
   let demos=0, ventas=0, volumen=0;
   (appts||[]).forEach(a=>{
     if(a._sincronizado) return; // ya atribuida a un cliente → se cuenta vía su historial
@@ -1296,7 +1307,13 @@ function calcularSemanaAgente(agente, allData){
     if(agente && a.agente!==agente) return;
     if(!enSemana(a.fecha)) return;
     if(a.tipo==="cita" || a._type==="cita") citas++;
+    if(ACCESS_V2 && (a.tipo==="servicio"||a._type==="servicio")) return;   // v2: los servicios se cuentan abajo, por su fecha real
     if((a.resultado==="demo_venta"||a.resultado==="venta") && a.monto) volumen += Number(a.monto)||0;
+  });
+  // v2: venta durante un servicio = venta + volumen (sin demo), en la fecha real del resultado.
+  if(ACCESS_V2) (allData.appts||[]).forEach(a=>{
+    if(agente && a.agente!==agente) return;
+    if(esVentaServicioV2(a) && enSemana(serviceMetricDate(a))){ ventas++; volumen += Number(a.monto)||0; }
   });
   clientes.forEach(c=>{
     lst(c.historial).forEach(h=>{
@@ -3777,8 +3794,10 @@ function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada, v2=null }) {
             {a.direccion?` · ${a.direccion}`:""}
           </div>
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-            {/* Servicio: indicador verde (realizado) / rojo (no realizado o pendiente) */}
-            {esServicio ? (
+            {/* Servicio: indicador verde (realizado) / rojo (no realizado o pendiente) · v2: estado de services/serviceV2 */}
+            {esServicio && v2 ? (
+              <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md ${ESTADO_SERVICIO[estadoServicio(a)].badge}`}>{ESTADO_SERVICIO[estadoServicio(a)].label}</span>
+            ) : esServicio ? (
               servEstado==="realizado" ? (
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white" style={{background:"#16a34a"}}><Ico e="✅" className="mr-1.5" />Se realizó</span>
               ) : servEstado==="no_realizado" ? (
@@ -3805,8 +3824,11 @@ function CitaCard({ a, onUpdate, onDelete, mostrarFecha, esPasada, v2=null }) {
         <div className="mt-2 pl-10">
           {mode==="" && (
             <>
-              {/* Servicio: botones de resultado directos (Se realizó / No se realizó) */}
-              {esServicio ? (
+              {/* Servicio: botones de resultado directos (Se realizó / No se realizó) · v2: la MISMA tarjeta que la pestaña Servicio */}
+              {esServicio && v2 ? (
+                <ServicioAccionesV2 s={a} autor={v2.autor} puedeGestionar={v2.puedeResultado} puedeBorrar={v2.puedeBorrar} appts={v2.appts}
+                  productos={PRODUCTOS_SERVICIO_V2} genId={genId} onUpdate={onUpdate} onCrear={v2.onCrear} onBorrar={onDelete} />
+              ) : esServicio ? (
                 <>
                   {(!v2 || v2.puedeResultado) && <div className="grid grid-cols-2 gap-2 mb-2">
                     <button onClick={()=>setServRes("realizado")}
@@ -4857,6 +4879,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
   const [dupV2,setDupV2]=useState(null);              // {appt, existente} → aviso de duplicado
   const [guardadaV2,setGuardadaV2]=useState(null);    // última cita guardada → Google / Apple Calendar
   const cfgV2=V2?{ autor:autorV2, puedeResultado:canRecordVisitResult(v2User.role), puedeBorrar:canHardDelete(v2User.role),
+    appts, onCrear:(n)=>setAppts(p=>[n,...p]),   // servicio: mantenimiento futuro tras una venta
     onReprogramarVisita:(a,fecha,nota)=>{
       const { original, nueva }=reprogramarDesdeVisita(a, fecha, nota, autorV2, new Date(), genId());
       setAppts(p=>[{...nueva,_type:"cita"}, ...p.map(x=>x.id===a.id?original:x)]);
@@ -4866,7 +4889,8 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
   const guardarV2=(appt, forzar=false)=>{
     const c=clienteV2 && clienteV2!=="manual" ? clienteV2 : null;
     const nueva={...appt, id:genId(), _type:appt.tipo, ...(c?{ sourceSection:c.section, sourceRecordId:c.recId, ...(c.refIdx!==undefined?{sourceRefIndex:c.refIdx}:{}) }:{})};
-    const existente=!forzar && duplicateApptCandidate(appts, nueva);
+    // Servicio: su propia regla de duplicado (una cita comercial NO duplica un servicio).
+    const existente=!forzar && (appt.tipo==="servicio" ? duplicateServiceCandidate(appts, nueva) : duplicateApptCandidate(appts, nueva));
     if(existente){ setDupV2({appt, existente}); return; }
     setDupV2(null);
     window.open(gcalLink({...nueva, createdByName:autorV2.nombre}),"_blank");
@@ -5104,8 +5128,12 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
           })}</div>)}
 
       {showForm && <Modal title={`${TIPO_ICON[preType]||"📅"} ${TYPE_OPTIONS.find(t=>t.v===preType)?.l||"Nueva cita"}`} onClose={()=>{setShowForm(false);setPreType(null);}}>
-        {V2 && dupV2 && <AvisoDuplicadoV2 existente={dupV2.existente} onVolver={()=>setDupV2(null)} onGuardar={()=>guardarV2(dupV2.appt, true)} />}
+        {V2 && dupV2 && <AvisoDuplicadoV2 existente={dupV2.existente} onVolver={()=>setDupV2(null)} onGuardar={()=>guardarV2(dupV2.appt, true)}
+          mensaje={dupV2.appt?.tipo==="servicio" ? "Ya existe un servicio similar para este cliente cerca de esa fecha." : undefined} />}
         {(()=>{ const form = V2 && preType==="cita" && !clienteV2 ? <ClientePickerV2 allData={allData} onElegir={c=>setClienteV2(c)} onManual={()=>setClienteV2("manual")} onCerrar={()=>{setShowForm(false);setPreType(null);}} />
+        : V2 && preType==="servicio" && !clienteV2 ? <ClientePickerV2 allData={allData} candidatos={candidatosServicio(allData)} mostrarSeccion manualLabel="Servicio manual (sin cliente registrado)"
+            texto="Busca al cliente (primero Distribución): se llenan sus datos y el servicio queda ligado a su registro."
+            onElegir={c=>setClienteV2(c)} onManual={()=>setClienteV2("manual")} onCerrar={()=>{setShowForm(false);setPreType(null);}} />
         : <AppointmentForm key={V2&&clienteV2&&clienteV2!=="manual"?clienteV2.key:"nueva"} client={V2&&clienteV2&&clienteV2!=="manual"?clienteV2:undefined} forceTipo={preType} loading={calLoading} onSave={handleSchedule} onClose={()=>{setShowForm(false);setPreType(null);setClienteV2(null);}} agenteActivo={V2?v2User.nombre:agente} />;
           // v2: el formulario sigue montado (oculto) durante el aviso de duplicado → "Volver" conserva lo escrito.
           return V2 ? <div style={dupV2 ? {display:"none"} : undefined}>{form}</div> : form; })()}
@@ -6209,7 +6237,8 @@ function ControlActividad({ allData, appts, reclutamiento, cierres, onGuardarCie
     const invitados = aps.filter(a=>(a.tipo==="entrevista"||a._type==="entrevista") && enP(a.fecha)).length;
     const entrevistas = (reclutamiento||[]).filter(r=>(r.entrevista_resultado==="entrevistado"||r.entrevistado) && enP(r.entrevista_agendada||r.entrevistado_fecha||r.creado)).length;
     // Servicios realizados (por fecha del servicio)
-    const servicios = aps.filter(a=>(a.tipo==="servicio"||a._type==="servicio") && a.servicioResultado==="realizado" && enP(a.fecha)).length;
+    // v2: realizados = realizado + venta, en la fecha REAL del resultado (resultAt || fecha)
+    const servicios = ACCESS_V2 ? serviciosRealizados(aps, enP) : aps.filter(a=>(a.tipo==="servicio"||a._type==="servicio") && a.servicioResultado==="realizado" && enP(a.fecha)).length;
     // Demos / ventas / volumen — función central (misma que Estadísticas e Incentivos)
     const _vd = contarVentasDemos({ appts:aps, clientes:clientesHist, enP });
     const demos=_vd.demos, ventas=_vd.ventas, volumen=_vd.volumen;
@@ -7934,16 +7963,31 @@ const SERVICIO_ESTADO = {
 
 // ── CARTUCHOS Y FILTROS (dentro de Servicios): todos los cambios ordenados
 // por el más próximo, con ficha del cliente, llamada, WhatsApp listo y agendar cita.
-function CartuchosServicioPanel({ allData, appts, setAppts, agente, notify }){
+function CartuchosServicioPanel({ allData, appts, setAppts, agente, notify, v2=false }){
   const [busca,setBusca]=useState("");
+  const [dupCart,setDupCart]=useState(null);   // v2: {nuevo, existente} → aviso de servicio duplicado
   const noE=a=>(a||[]).filter(c=>!c.eliminado);
-  const flat=[...noE(allData.agregados),...noE(allData.prospectos),...noE(allData.distribucion),...noE(allData.referidos)];
+  // v2: cada cliente lleva su sección para que el servicio quede ligado a su registro real.
+  const tag=(sec)=>v2?noE(allData[sec]).map(c=>({...c,_sec:sec})):noE(allData[sec]);
+  const flat=[...tag("agregados"),...tag("prospectos"),...tag("distribucion"),...tag("referidos")];
   const lista=calcularCartuchos(flat, appts, 36500) // ventana infinita → TODOS, del más próximo al más lejano
     .filter(x=>{ const q=(busca||"").toLowerCase(); return !q || (x.nombre||"").toLowerCase().includes(q) || (x.producto||"").toLowerCase().includes(q); });
   const vencidos=lista.filter(x=>x.vencido).length;
   const fFecha=(d)=>d.toLocaleDateString("es-MX",{day:"numeric",month:"short",year:"numeric"});
   const msgWA=(x)=>encodeURIComponent(`¡Hola ${(x.nombre||"").split(" ")[0]}! 👋 Le saluda ${agente||"su equipo"} de Royal Prestige. Le corresponde el cambio de ${x.producto||"su cartucho"}${x.vencido?" (ya está vencido ⚠️)":` el ${fFecha(x.proxFecha)}`}. ¿Qué día le viene bien para agendar su visita y dejar su agua como nueva? 💧`);
+  // v2: hora LOCAL, registro de origen si existe, y aviso de posible duplicado (no bloquea).
+  const agendarV2=(x, forzado=null)=>{
+    const nuevo = forzado || servicioDesdeCartucho(x, new Date(), genId());
+    const existente = !forzado && duplicateServiceCandidate(appts, nuevo);
+    if(existente){ setDupCart({nuevo, existente}); return; }
+    setDupCart(null);
+    setAppts(p=>[nuevo,...(p||[])]);
+    const dia = nuevo.fecha.slice(0,10);
+    notify && notify("servicio",`📅 Servicio agendado: ${nuevo.nombre}`,`Cambio de ${nuevo.producto||"cartucho"} — ${dia}. Ajusta la hora en Servicios/Agenda.`,"🔧 Servicios");
+    alert(`✅ Servicio creado para ${nuevo.nombre} (${dia}). Ajusta la hora en la pestaña Servicios.`);
+  };
   const agendar=(x)=>{
+    if(v2) return agendarV2(x);
     const fechaISO=new Date(Math.max(x.proxFecha.getTime(), Date.now())).toISOString().slice(0,10);
     setAppts(p=>[...(p||[]),{ id:genId(), tipo:"servicio", nombre:x.nombre, telefono:x.telefono||"", fecha:fechaISO, hora:"", notas:`🔔 Cambio de cartucho: ${x.producto||""}`.trim(), agente, creado:new Date().toISOString() }]);
     notify && notify("servicio",`📅 Servicio agendado: ${x.nombre}`,`Cambio de ${x.producto||"cartucho"} — ${fechaISO}. Ajusta la hora en Servicios/Agenda.`,"🔧 Servicios");
@@ -7951,6 +7995,8 @@ function CartuchosServicioPanel({ allData, appts, setAppts, agente, notify }){
   };
   return (
     <div>
+      {v2 && dupCart && <div className="mb-3"><AvisoDuplicadoV2 existente={dupCart.existente} mensaje="Ya existe un servicio similar para este cliente cerca de esa fecha."
+        onVolver={()=>setDupCart(null)} onGuardar={()=>agendarV2(null, dupCart.nuevo)} /></div>}
       <div className="flex items-center gap-2 mb-3">
         <input className={inpLight+" flex-1"} placeholder="Buscar por cliente o producto…" value={busca} onChange={e=>setBusca(e.target.value)} />
         {vencidos>0 && <span className="shrink-0 text-[11px] font-black text-white bg-red-500 px-2.5 py-1.5 rounded-full"><Ico e="⚠" className="mr-1.5" />{vencidos} vencido(s)</span>}
@@ -9092,8 +9138,13 @@ function AppRoot() {
                   <RutasSection rutas={state.rutas||[]} setRutas={(fn)=>setState(s=>({...s,rutas:typeof fn==="function"?fn(s.rutas||[]):fn}))} allData={allData} agentes={AGENTES} agente={agenteActivo} notify={notify} />
                   {ACCESS_V2 && v2User && <RutasEquipoV2 rutas={state.rutasEquipo||[]} estados={ESTADO_RUTA} />}
                 </>)}
-            {tab==="servicio" && <ServicioSection key={ACCESS_V2?(navIntent?.key||"servicio"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} notify={notify} allData={allData}
-              init={ACCESS_V2 && navIntent?.tab==="servicio" ? navIntent : null} />}
+            {tab==="servicio" && (ACCESS_V2 && v2User
+              ? <ServiciosV2 key={navIntent?.key||"servicio"} appts={state.appts||[]} setAppts={setAppts} autor={{uid:v2User.uid, nombre:v2User.nombre}}
+                  puedeGestionar={canRecordVisitResult(v2User.role)} puedeBorrar={canHardDelete(v2User.role)} productos={PRODUCTOS_SERVICIO_V2} genId={genId}
+                  init={navIntent?.tab==="servicio" ? navIntent : null}
+                  renderCartuchos={()=><CartuchosServicioPanel v2 allData={allData||{}} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} notify={notify} />} />
+              : <ServicioSection key={ACCESS_V2?(navIntent?.key||"servicio"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} notify={notify} allData={allData}
+              init={ACCESS_V2 && navIntent?.tab==="servicio" ? navIntent : null} />)}
             {tab==="control" && <ControlActividad allData={allData} appts={state.appts||[]} reclutamiento={state.reclutamiento||[]} cierres={state.controlCierres||[]} onGuardarCierre={(c)=>setSection("controlCierres",p=>[c,...(p||[])])} />}
             {tab==="stats" && <Stats data={allData} callLog={state.callLog} appts={state.appts||[]} init={ACCESS_V2 && navIntent?.tab==="stats" ? navIntent : null} />}
             {tab==="cumpleanos" && (ACCESS_V2 && v2User && especialidadDe(v2User.role)
