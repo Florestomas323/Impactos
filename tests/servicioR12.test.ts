@@ -140,7 +140,7 @@ test("D4 · Store: el registro nuevo conserva createdByUid original (solo staff,
 });
 
 
-test("E · Corregir venta: quita referencia; retira auto-creado exclusivo; conserva cliente preexistente", () => {
+test("E · Corregir venta (Base de Datos r1): auto-creado sin trabajo → PAPELERA (nunca borrado); trabajado o preexistente → se desvincula y sigue activo", () => {
   const venta = registrarVentaServicio(serv({ id: "sVenta", sourceSection: "prospectos", sourceRecordId: "p1" }),
     { monto: 500, producto: "Ducha" }, TOMAS, NOW);
   const creado = distribucionDesdeVenta([], venta, NOW);
@@ -148,19 +148,25 @@ test("E · Corregir venta: quita referencia; retira auto-creado exclusivo; conse
   assert.equal(creado.lista.length, 1);
 
   const corregido = registrarResultadoServicio(venta, "no_recibio", TOMAS, new Date(NOW.getTime() + 60000));
-  const retirado = reconciliarDistribucionPorVenta(creado.lista, corregido, new Date(NOW.getTime() + 120000));
-  assert.equal(retirado.accion, "retirado");
-  assert.equal(retirado.lista.length, 0);
+  const t2 = new Date(NOW.getTime() + 120000);
+  // A · auto-creado y nunca trabajado → papelera con motivo, fecha y quién; NO sale de la lista
+  const papelera = reconciliarDistribucionPorVenta(creado.lista, corregido, t2, { uid: "sup1", nombre: "Eva Supervisor" });
+  assert.equal(papelera.accion, "papelera");
+  assert.equal(papelera.lista.length, 1);                                           // nunca "retirado"/delete
+  const r = papelera.lista[0];
+  assert.deepEqual([r.eliminado, r.eliminadoMotivo, r.eliminadoAt, r.eliminadoPorUid, r.eliminadoPorNombre, r.ventasOrigen, "ventaOrigenApptId" in r],
+    [true, "Venta corregida", t2.toISOString(), "sup1", "Eva Supervisor", [], false]);
+  assert.equal(r.createdFrom, "venta_distribucion"); assert.equal(r.sourceRecordId, "p1");   // trazabilidad intacta
 
+  // C · preexistente → solo se quita la referencia; sigue activo
   const existente = [{ id: "d1", nombre: "Ana Pérez", telefono: "2105550101", ventasOrigen: [{ apptId: "sVenta", tipo: "servicio" }] }];
-  const desvinculado = reconciliarDistribucionPorVenta(existente, corregido, new Date(NOW.getTime() + 120000));
+  const desvinculado = reconciliarDistribucionPorVenta(existente, corregido, t2, { uid: "sup1", nombre: "Eva" });
   assert.equal(desvinculado.accion, "desvinculado");
-  assert.equal(desvinculado.lista.length, 1);
-  assert.deepEqual(desvinculado.lista[0].ventasOrigen, []);
+  assert.deepEqual([desvinculado.lista.length, desvinculado.lista[0].eliminado, desvinculado.lista[0].ventasOrigen], [1, undefined, []]);
 
+  // B · auto-creado pero con otra venta → sigue activo, se quita solo esa referencia
   const conOtraVenta = [{ ...creado.lista[0], ventasOrigen: [...creado.lista[0].ventasOrigen, { apptId: "otra", tipo: "cita" }] }];
-  const conserva = reconciliarDistribucionPorVenta(conOtraVenta, corregido, new Date(NOW.getTime() + 120000));
+  const conserva = reconciliarDistribucionPorVenta(conOtraVenta, corregido, t2);
   assert.equal(conserva.accion, "desvinculado");
-  assert.equal(conserva.lista.length, 1);
-  assert.deepEqual(conserva.lista[0].ventasOrigen.map((x: any) => x.apptId), ["otra"]);
+  assert.deepEqual([conserva.lista.length, conserva.lista[0].eliminado, conserva.lista[0].ventasOrigen.map((x: any) => x.apptId)], [1, undefined, ["otra"]]);
 });
