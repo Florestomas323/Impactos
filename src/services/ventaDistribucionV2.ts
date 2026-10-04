@@ -84,40 +84,45 @@ export function distribucionDesdeVenta(distribucion: any[], a: any, now: Date = 
   return { lista: [nuevo, ...lista], accion: "creado" as const, id: nuevo.id };
 }
 
-// Reconciliación después de una corrección de resultado.
-// Si el evento sigue siendo venta, conserva/crea el vínculo.
-// Si dejó de ser venta, elimina SOLO la referencia de esa venta.
-// Un registro creado automáticamente exclusivamente por esa venta se retira de Distribución
-// cuando ya no conserva ninguna otra venta de origen. Un cliente que ya existía en
-// Distribución nunca se borra por corregir una venta.
-export function reconciliarDistribucionPorVenta(distribucion: any[], a: any, now: Date = new Date()) {
+// ── Reconciliación después de corregir un resultado ─────────────────────────
+// Si el evento sigue siendo venta, conserva/crea el vínculo. Si DEJÓ de ser venta:
+//   A) registro auto-creado por ESA venta y nunca trabajado → PAPELERA (eliminado:true + motivo,
+//      fecha y quién), sin quitarlo de la lista: nunca borrado físico, no depende de permisos de delete.
+//   B) auto-creado pero ya trabajado (notas, historial, asignación, Cobranza, otras ventas…)
+//      → sigue ACTIVO; solo se quita la referencia de esa venta.
+//   C) registro preexistente → sigue ACTIVO; solo se quita la referencia.
+// Funciona igual para super_admin, distribuidor y supervisor.
+type Autor = { uid?: string; nombre?: string } | null | undefined;
+const noVacio = (v: any) => !(v === undefined || v === null || String(v).trim() === "");
+export function registroTrabajado(r: any, restantes: any[] = lst(r?.ventasOrigen)) {
+  return restantes.length > 0
+    || lst(r?.notas).length > 0 || lst(r?.historial).length > 0 || noVacio(r?.ultimaNota)
+    || noVacio(r?.assignedTo) || noVacio(r?.linkedRecordId)
+    || noVacio(r?.estado) || noVacio(r?.proximo_seguimiento) || noVacio(r?.ultima_cita_programada)
+    || (noVacio(r?.actualizado) && noVacio(r?.creado) && String(r.actualizado) > String(r.creado));
+}
+export function reconciliarDistribucionPorVenta(distribucion: any[], a: any, now: Date = new Date(), autor: Autor = null) {
   const lista = lst(distribucion);
   if (esVentaParaDistribucion(a)) return distribucionDesdeVenta(lista, a, now);
 
-  let accion: "sin_cambios" | "desvinculado" | "retirado" = "sin_cambios";
-  const siguiente: any[] = [];
-  for (const r of lista) {
-    if (!r) { siguiente.push(r); continue; }
+  let accion: "sin_cambios" | "desvinculado" | "papelera" = "sin_cambios";
+  let id: any = null;
+  const siguiente = lista.map((r: any) => {
+    if (!r) return r;
     const ventas = lst(r.ventasOrigen);
-    const tenia = ventas.some((v: any) => String(v?.apptId) === String(a?.id));
-    if (!tenia) { siguiente.push(r); continue; }
-
+    if (!ventas.some((v: any) => String(v?.apptId) === String(a?.id))) return r;
+    id = r.id;
     const restantes = ventas.filter((v: any) => String(v?.apptId) !== String(a?.id));
-    const creadoSoloPorEstaVenta =
-      r.createdFrom === "venta_distribucion" &&
-      String(r.ventaOrigenApptId || "") === String(a?.id || "");
-
-    if (creadoSoloPorEstaVenta && restantes.length === 0) {
-      accion = "retirado";
-      continue;
-    }
-
-    accion = accion === "retirado" ? accion : "desvinculado";
     const upd: any = { ...r, ventasOrigen: restantes, actualizado: now.toISOString() };
-    // ventaOrigenApptId solo identifica la venta que creó el registro automático.
-    // Si el registro permanece por otras ventas, ya no debe apuntar a una venta corregida.
     if (String(upd.ventaOrigenApptId || "") === String(a?.id || "")) delete upd.ventaOrigenApptId;
-    siguiente.push(upd);
-  }
-  return { lista: siguiente, accion, id: null };
+    const autoCreado = r.createdFrom === "venta_distribucion" && String(r.ventaOrigenApptId || "") === String(a?.id || "");
+    if (autoCreado && !r.eliminado && !registroTrabajado(r, restantes)) {           // A
+      accion = "papelera";
+      return { ...upd, eliminado: true, eliminadoMotivo: "Venta corregida", eliminadoAt: now.toISOString(),
+        ...(autor?.uid ? { eliminadoPorUid: autor.uid } : {}), ...(autor?.nombre ? { eliminadoPorNombre: autor.nombre } : {}) };
+    }
+    if (accion !== "papelera") accion = "desvinculado";                               // B · C
+    return upd;
+  });
+  return { lista: siguiente, accion, id };
 }
