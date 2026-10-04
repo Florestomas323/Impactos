@@ -21,6 +21,8 @@ import { enrichNewAppts, trazaRegistro } from "./services/apptTrace";
 import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEvento, fechaLocal as fechaLocalV2, reprogramarAntesDeVisita, reprogramarDesdeVisita, registrarResultado as registrarResultadoV2, cancelarCita as cancelarCitaV2, enFiltro, agendaCounters, isPastAppt, canRecordVisitResult, canHardDelete, duplicateApptCandidate, PALETA_TIPOS, COLOR_CANCELADA, isCancelled as isCancelledV2, colorBordeCita, ETIQUETA_TIPO, tipoOficial } from "./services/agendaV2";
 import { contarVentasDemosV2, serviceMetricDate, serviciosRealizados, ventaServicioCartucho, ventasServicioDe, apptsDelGrupo, ultimoCambioCartucho, tiempoHumano, alertasCartucho, servicioDesdeCartucho, duplicateServiceCandidate, candidatosServicio, estadoServicio, ESTADO_SERVICIO } from "./services/serviceV2";
 import { ServicioAccionesV2, ServiciosV2 } from "./components/servicio/ServicioV2";
+import { DatabaseV2, AvisoDuplicadoDB, VerMasDB } from "./components/database/DatabaseV2";
+import { coincideBusquedaV2, paginar as paginarDB, candidatoDuplicado as candidatoDuplicadoDB, candidatosDuplicadoAnfitrion, accionesRegistroV2, ventaDesdeRegistro, camposVenta, clavesReferidos, correccionDesdeRegistro } from "./services/databaseV2";
 import { reconciliarDistribucionPorVenta } from "./services/ventaDistribucionV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
@@ -2911,7 +2913,7 @@ function CallMenu({ telefono, onCall, compact }) {
 }
 
 // ─── CLIENT ROW (compacta + expandible) ─────────────────────���─
-function ClientRow({ c, onStatusChange, onEdit, onSchedule, onDelete, onRestore, onHardDelete, inPapelera, onCall, onApptResult, onSaveCallToHistorial, onSaveNota, type, role, onToggleRoute, isInRoute, agente, onDeleteHistorial, onMarcarLlamado, infoCobranza }) {
+function ClientRow({ acciones=null, c, onStatusChange, onEdit, onSchedule, onDelete, onRestore, onHardDelete, inPapelera, onCall, onApptResult, onSaveCallToHistorial, onSaveNota, type, role, onToggleRoute, isInRoute, agente, onDeleteHistorial, onMarcarLlamado, infoCobranza }) {
   const [expanded,setExpanded]=useState(false);
   const [showPicker,setShowPicker]=useState(false);
   const [showResult,setShowResult]=useState(false);
@@ -2939,6 +2941,9 @@ function ClientRow({ c, onStatusChange, onEdit, onSchedule, onDelete, onRestore,
   }
   const s=STATUS_COLORS[c.estado]||STATUS_COLORS.sin_estado;
   const isCita=c.estado==="verde";
+  // v2: el resultado FÍSICO (cita) solo lo registra el staff; el de llamada sigue para todos. Legacy: acciones=null → siempre.
+  const puedeResultadoFisico = !acciones || acciones.resultadoFisico !== false;
+  const verResultado = !isCita || puedeResultadoFisico;
   const historial=lst(c.historial);
   // notas: solo entradas reales {texto,...}. Si el campo es texto legado, se
   // muestra como UNA nota (nunca se parte en letras) y se ignoran las vacías.
@@ -2960,6 +2965,7 @@ function ClientRow({ c, onStatusChange, onEdit, onSchedule, onDelete, onRestore,
   };
 
   const handleResultClick=(r)=>{
+    if(isCita && !puedeResultadoFisico) return;   // guard v2: telemarketing no registra resultado físico
     if(r.id==="reset"){
       onApptResult(c,"reset",resultDetail);
       setShowResult(false); setResultDetail(""); setMontoVenta(""); setProductoVenta(""); setFiltroVenta(""); setResultSelId("");
@@ -3231,22 +3237,22 @@ function ClientRow({ c, onStatusChange, onEdit, onSchedule, onDelete, onRestore,
 
           {/* Botones de acción */}
           <div className="flex gap-1.5 flex-wrap">
-            {!inPapelera && (
+            {!inPapelera && verResultado && (
               <button onClick={()=>setShowResult(p=>!p)}
                 className={`flex-1 text-xs font-bold py-2 px-2 rounded-lg transition ${showResult?"text-white":"text-[#5b21b6]"}`}
                 style={showResult?{background:RP.navy}:{background:"#f1ecfd"}}>
                 {isCita?<><Ico e="🎯" className="mr-1" />Resultado cita</>:<><Ico e="📞" className="mr-1" />Resultado</>}
               </button>
             )}
-            {!inPapelera && <button onClick={()=>onSchedule(c)} className="flex-1 text-xs font-bold py-2 px-2 rounded-lg bg-[#7c3aed]/12 text-[#7c3aed]"><Ico e="📅" className="mr-1.5" />Agendar</button>}
-            {!inPapelera && <button onClick={()=>onEdit(c)} className="text-xs font-bold py-2 px-2 rounded-lg bg-[#f4f6f9] text-slate-600"><Ico e="✏" /></button>}
-            {!inPapelera && <button onClick={()=>onDelete(c.id)} className="text-xs font-bold py-2 px-2 rounded-lg bg-red-50 text-red-500" title="Mover a papelera"><Ico e="🗑" /></button>}
-            {inPapelera && <button onClick={()=>onRestore(c.id)} className="flex-1 text-xs font-bold py-2 px-2 rounded-lg bg-emerald-50 text-emerald-600"><Ico e="♻" className="mr-1.5" />Restaurar</button>}
-            {inPapelera && <button onClick={()=>{if(confirm("¿Eliminar permanentemente? No se puede deshacer."))onHardDelete(c.id);}} className="flex-1 text-xs font-bold py-2 px-2 rounded-lg bg-red-100 text-red-600"><Ico e="🗑" className="mr-1.5" />Definitivo</button>}
+            {!inPapelera && (!acciones||acciones.agendar) && <button onClick={()=>onSchedule(c)} className="flex-1 text-xs font-bold py-2 px-2 rounded-lg bg-[#7c3aed]/12 text-[#7c3aed]"><Ico e="📅" className="mr-1.5" />Agendar</button>}
+            {!inPapelera && (!acciones||acciones.editar) && <button onClick={()=>onEdit(c)} className="text-xs font-bold py-2 px-2 rounded-lg bg-[#f4f6f9] text-slate-600"><Ico e="✏" /></button>}
+            {!inPapelera && (!acciones||acciones.papelera) && <button onClick={()=>onDelete(c.id)} className="text-xs font-bold py-2 px-2 rounded-lg bg-red-50 text-red-500" title="Mover a papelera"><Ico e="🗑" /></button>}
+            {inPapelera && (!acciones||acciones.restaurar) && <button onClick={()=>onRestore(c.id)} className="flex-1 text-xs font-bold py-2 px-2 rounded-lg bg-emerald-50 text-emerald-600"><Ico e="♻" className="mr-1.5" />Restaurar</button>}
+            {inPapelera && (!acciones||acciones.borrarDefinitivo) && <button onClick={()=>{if(confirm("¿Eliminar permanentemente? No se puede deshacer."))onHardDelete(c.id);}} className="flex-1 text-xs font-bold py-2 px-2 rounded-lg bg-red-100 text-red-600"><Ico e="🗑" className="mr-1.5" />Definitivo</button>}
           </div>
 
           {/* Panel de resultado */}
-          {showResult && !inPapelera && (
+          {showResult && !inPapelera && verResultado && (
             <div className="mt-3 rounded-xl overflow-hidden border border-[#5b21b6]/15">
               <div className="px-3 py-2 text-xs font-bold text-white tracking-wide uppercase" style={{background:RP.navy}}>
                 {isCita?<><Ico e="🎯" className="mr-1" />Resultado de la cita</>:<><Ico e="☎" className="mr-1" />Registrar llamada</>}
@@ -3435,7 +3441,9 @@ function ClientRow({ c, onStatusChange, onEdit, onSchedule, onDelete, onRestore,
 }
 
 // ─── DB SECTION ───────────────────────────────────────────────
-function DBSection({ data, setData, type, title, onCallLog, role, allData, agente, notify, setAppts, rolActivo="", cobranzaClientes=null }) {
+// v2 (opcional, solo lo pasa DatabaseV2): { autor, actor, onVenta, pagina } → paginación, duplicados como aviso,
+// acciones por rol, venta desde la tarjeta con trazabilidad. Sin esta prop: igual que siempre (legacy).
+function DBSection({ data, setData, type, title, onCallLog, role, allData, agente, notify, setAppts, rolActivo="", cobranzaClientes=null, v2=null }) {
   // Exportar (CSV/PDF) solo para roles de gestión — NUNCA telemarketing/vendedor
   const puedeExportar = canDo("exportar");
   const [search,setSearch]=useState("");const [filterStatus,setFilterStatus]=useState("todos");
@@ -3468,13 +3476,25 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
     if(c.eliminado) return false;                 // ocultar eliminados de la vista normal
     if(!_tieneIdValidoDB(c)) return false;        // C) descartar registros sin id válido
     // Búsqueda global unificada (nombre/teléfono/ciudad/estado/CP/dirección, sin acentos)
-    return coincideBusqueda(c, {search, filterStatus, filterCity, filterCP});
+    return v2 ? coincideBusquedaV2(c, {search, filterStatus, filterCity, filterCP}) : coincideBusqueda(c, {search, filterStatus, filterCity, filterCP});
   });
+  // v2: paginación en memoria (30 + "Ver más"); filtros y búsqueda se aplican ANTES; se reinicia al cambiar filtros.
+  const [visiblesV2,setVisiblesV2]=useState(30);
+  useEffect(()=>{ setVisiblesV2(v2?.pagina||30); },[search, filterStatus, filterCity, filterCP, showPapelera, type, v2?.pagina]);
+  const pagV2 = v2 ? paginarDB(filtered, visiblesV2) : null;
+  const listaRender = v2 ? pagV2.items : filtered;
+  const [dupV2,setDupV2]=useState(null);   // v2: {d, dups} → aviso de posible duplicado (Volver / Guardar de todos modos)
   const toggleRoute=id=>setRouteSel(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
   const routeList=filtered.filter(c=>routeSel.includes(c.id));
-  const saveNew=d=>{
+  const saveNew=(d, forzar=false)=>{
+    if(v2 && !forzar && allData){
+      const excluirId = editItem ? editItem.id : undefined;
+      const dups = type==="referido" ? candidatosDuplicadoAnfitrion(d, allData, {excluirId}) : (()=>{ const x=candidatoDuplicadoDB(d, allData, {excluirId}); return x?[x]:[]; })();
+      if(dups.length){ setDupV2({d, dups}); return; }
+    }
+    setDupV2(null);
     if(editItem){ setData(p=>p.map(x=>x.id===editItem.id?{...d,id:editItem.id}:x)); setShowForm(false);setEditItem(null); return; }
-    if(type!=="referido" && allData && isDuplicate(d, allData)){
+    if(!v2 && type!=="referido" && allData && isDuplicate(d, allData)){
       setDupMsg(`⚠️ "${d.nombre||"Sin nombre"}" con ese teléfono ya existe. No se agregó duplicado.`);
       setShowForm(false); return;
     }
@@ -3538,7 +3558,20 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
   const handleApptResult=(c,id,detail="",monto="",producto="",cartucho_meses=0)=>{
     const RLABEL={demo_venta:"💰 Demo / venta",demo_no_venta:"🎬 Demo / no venta",no_recibio:"🚪 No recibió",no_visito:"🚷 No se visitó",seguimiento:"📅 Llamar más adelante",recompra:"✖️ Recompra (no pagó su deuda)"};
     const montoNum = id==="demo_venta" ? Number(monto)||0 : 0;
-    if(id==="demo_venta")      setData(p=>p.map(x=>x.id===c.id?{...x,venta:true, resultado:"demo_venta",    resultado_detalle:detail||x.resultado_detalle, ultimo_monto_venta:montoNum||x.ultimo_monto_venta, ultimo_producto:producto||x.ultimo_producto, ultimo_cartucho_meses:cartucho_meses||x.ultimo_cartucho_meses}:x));
+    if(v2 && !accionesRegistroV2(v2.actor, c, type).resultadoFisico) return;   // guard v2: telemarketing no registra resultado físico
+    if(v2 && id!=="demo_venta"){
+      // v2: la corrección sella su autor; si había una venta de registro vigente, se reconcilia Distribución con el MISMO id
+      const { patch, reconciliar } = correccionDesdeRegistro(c, id, v2.autor, new Date());
+      setData(p=>p.map(x=>x.id===c.id?{...x, ...patch}:x));
+      if(reconciliar && v2.onVenta) v2.onVenta(reconciliar);
+    }
+    if(v2 && id==="demo_venta"){
+      // v2: resultBy* en el registro + Venta → Distribución por el MISMO camino (no es una cita: no duplica Venta/Volumen)
+      const { registro, venta } = ventaDesdeRegistro(c, type, { monto, producto, detail, cartucho_meses }, v2.autor, new Date());
+      setData(p=>p.map(x=>x.id===c.id?{...x, ...registro, id:x.id}:x));
+      if(v2.onVenta) v2.onVenta(venta);
+    }
+    else if(id==="demo_venta")      setData(p=>p.map(x=>x.id===c.id?{...x,venta:true, resultado:"demo_venta",    resultado_detalle:detail||x.resultado_detalle, ultimo_monto_venta:montoNum||x.ultimo_monto_venta, ultimo_producto:producto||x.ultimo_producto, ultimo_cartucho_meses:cartucho_meses||x.ultimo_cartucho_meses}:x));
     else if(id==="demo_no_venta")  setData(p=>p.map(x=>x.id===c.id?{...x,venta:false,resultado:"demo_no_venta", resultado_detalle:detail||x.resultado_detalle}:x));
     else if(id==="no_recibio") setData(p=>p.map(x=>x.id===c.id?{...x,venta:false,resultado:"no_recibio",resultado_detalle:detail||x.resultado_detalle}:x));
     else if(id==="no_visito") setData(p=>p.map(x=>x.id===c.id?{...x,venta:false,resultado:"no_visito",resultado_detalle:detail||x.resultado_detalle}:x));
@@ -3634,22 +3667,36 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
 
       {filtered.length===0 && <div className="text-center py-12 text-slate-400"><div className="mb-3 flex justify-center"><Ico e="👥" size={36} strokeWidth={1.25} className="opacity-40" /></div><div className="text-sm font-bold">No hay registros.</div></div>}
       <div className="space-y-3">
-        {filtered.map((c,idx)=>type==="referido"?(
-          <div key={`dbref-${idx}-${String(c.id)}`} className="bg-white rounded-2xl border border-[#e8edf3] p-4 shadow-sm relative">
+        {listaRender.map((c,idx)=>{ const accRefV2 = v2 ? { ...accionesRegistroV2(v2.actor, c, "referido"), papelera:false, restaurar:false, borrarDefinitivo:false } : null;  // tarjetas internas: sin papelera propia
+          const clavesReferidosV2 = v2 ? clavesReferidos(c) : null;
+          return type==="referido"?(
+          <div key={v2?`dbref-${String(c.id)}`:`dbref-${idx}-${String(c.id)}`} className="bg-white rounded-2xl border border-[#e8edf3] p-4 shadow-sm relative">
 
             {/* ANFITRIÓN como tarjeta de cliente: llamable (tel/WS/SMS), con estado e historial propios */}
             {(()=>{
               const anfCard={...c, nombre:c.anfitrion||"(Sin anfitrión)", telefono:c.anfitrion_telefono||"", ciudad:c.anfitrion_ciudad||"", cuenta:c.anfitrion_cuenta||"", direccion:c.anfitrion_direccion||""};
               const patchAnf=(patch)=>setData(p=>p.map(anf=>anf.id===c.id?{...anf,...patch}:anf));
-              const saveHistAnf=(entry)=>setData(p=>p.map(anf=>anf.id===c.id?{...anf,historial:[...lst(anf.historial),entry]}:anf));
+              const saveHistAnf=(entry)=>setData(p=>p.map(anf=>anf.id===c.id?{...anf,historial:[...lst(anf.historial),v2?{...entry, uid:v2.autor.uid, nombre:v2.autor.nombre}:entry]}:anf));
               return (
-                <ClientRow c={anfCard} type="anfitrion" role={role}
+                <ClientRow acciones={accRefV2} {...(v2?{inPapelera:!!c.eliminado}:{})} c={anfCard} type="anfitrion" role={role}
                   onStatusChange={(id,st)=>patchAnf({estado:st})}
                   onEdit={()=>{setEditItem(c);setShowForm(true);}}
                   onSchedule={cc=>openSchedule(cc)}
                   onDelete={()=>{}}
                   onCall={onCallLog}
-                  onApptResult={(cc,rid,detail="")=>{
+                  onApptResult={(cc,rid,detail="",monto="",producto="",cartucho_meses=0)=>{
+                    if(v2 && !accRefV2.resultadoFisico) return;   // guard v2: telemarketing no registra resultado físico
+                    if(v2 && rid!=="demo_venta"){
+                      const { patch, reconciliar } = correccionDesdeRegistro(c, rid, v2.autor, new Date());
+                      patchAnf(patch); if(reconciliar && v2.onVenta) v2.onVenta(reconciliar);
+                    }
+                    if(v2 && rid==="demo_venta"){
+                      // v2: mismo flujo que el resto (resultBy* + Venta → Distribución). Origen: el anfitrión (sin índice).
+                      const { registro, venta } = ventaDesdeRegistro({...anfCard, id:c.id}, "referido", { monto, producto, detail, cartucho_meses }, v2.autor, new Date());
+                      patchAnf(camposVenta(registro));
+                      if(v2.onVenta) v2.onVenta(venta);
+                      return;
+                    }
                     const patch = rid==="demo_venta"?{venta:true,resultado:"demo_venta",resultado_detalle:detail}
                       : rid==="demo_no_venta"?{venta:false,resultado:"demo_no_venta",resultado_detalle:detail}
                       : rid==="no_recibio"?{venta:false,resultado:"no_recibio",resultado_detalle:detail}
@@ -3692,6 +3739,7 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
               <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Ico e="👥" className="mr-1.5" />Referidos (cada uno es llamable)</div>
               {lst(c.referidos).length===0 && <div className="text-xs text-slate-400 italic">Sin referidos aún. Toca ✏️ Editar para agregar.</div>}
               {lst(c.referidos).map((r,i)=>{
+                const claveRef = v2 ? clavesReferidosV2[i] : i;   // v2: clave estable (no solo índice)
                 const refCard={
                   ...r,
                   id:`${c.id}::${i}`,
@@ -3708,17 +3756,29 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
                 const saveHist=(entry)=>setData(p=>p.map(anf=>{
                   if(anf.id!==c.id) return anf;
                   const refs=[...lst(anf.referidos)];
-                  refs[i]={...refs[i],historial:[...lst(refs[i].historial),entry]};
+                  refs[i]={...refs[i],historial:[...lst(refs[i].historial),v2?{...entry, uid:v2.autor.uid, nombre:v2.autor.nombre}:entry]};
                   return {...anf,referidos:refs};
                 }));
                 return (
-                  <ClientRow key={i} c={refCard} type="referido-llamada" role={role}
+                  <ClientRow key={claveRef} acciones={accRefV2} {...(v2?{inPapelera:!!c.eliminado}:{})} c={refCard} type="referido-llamada" role={role}
                     onStatusChange={(id,st)=>patchRef({estado:st})}
                     onEdit={()=>{setEditItem(c);setShowForm(true);}}
                     onSchedule={cc=>openSchedule(cc)}
                     onDelete={()=>{}}
                     onCall={onCallLog}
-                    onApptResult={(cc,rid,detail="")=>{
+                    onApptResult={(cc,rid,detail="",monto="",producto="",cartucho_meses=0)=>{
+                      if(v2 && !accRefV2.resultadoFisico) return;   // guard v2: telemarketing no registra resultado físico
+                      if(v2 && rid!=="demo_venta"){
+                        const { patch, reconciliar } = correccionDesdeRegistro(refCard, rid, v2.autor, new Date());
+                        patchRef(patch); if(reconciliar && v2.onVenta) v2.onVenta(reconciliar);
+                      }
+                      if(v2 && rid==="demo_venta"){
+                        // v2: origen = anfitrión + índice REAL del referido (refCard.id = "anf::i")
+                        const { registro, venta } = ventaDesdeRegistro(refCard, "referido", { monto, producto, detail, cartucho_meses }, v2.autor, new Date());
+                        patchRef(camposVenta(registro));
+                        if(v2.onVenta) v2.onVenta(venta);
+                        return;
+                      }
                       const patch = rid==="demo_venta"?{venta:true,resultado:"demo_venta",resultado_detalle:detail}
                         : rid==="demo_no_venta"?{venta:false,resultado:"demo_no_venta",resultado_detalle:detail}
                         : rid==="no_recibio"?{venta:false,resultado:"no_recibio",resultado_detalle:detail}
@@ -3737,13 +3797,28 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
               })}
             </div>
 
-            <div className="flex gap-1.5 mt-3"><button onClick={()=>{setEditItem(c);setShowForm(true);}} className="text-xs px-3 py-1.5 rounded-md bg-[#f4f6f9] text-slate-700 font-bold border border-[#e5def4]"><Ico e="✏" className="mr-1.5" />Editar anfitrión / referidos</button><button onClick={()=>setData(p=>p.filter(x=>x.id!==c.id))} className="text-xs px-3 py-1.5 rounded-md bg-red-50 text-red-500 font-bold"><Ico e="🗑" /></button></div>
+            {!v2 ? <div className="flex gap-1.5 mt-3"><button onClick={()=>{setEditItem(c);setShowForm(true);}} className="text-xs px-3 py-1.5 rounded-md bg-[#f4f6f9] text-slate-700 font-bold border border-[#e5def4]"><Ico e="✏" className="mr-1.5" />Editar anfitrión / referidos</button><button onClick={()=>setData(p=>p.filter(x=>x.id!==c.id))} className="text-xs px-3 py-1.5 rounded-md bg-red-50 text-red-500 font-bold"><Ico e="🗑" /></button></div>
+            : (()=>{ const acc=accionesRegistroV2(v2.actor, c, "referido"); return (
+              /* v2: papelera = eliminado:true (nunca filter/delete); definitivo solo super_admin/distribuidor */
+              <div className="flex gap-1.5 mt-3">
+                {!c.eliminado && acc.editar && <button onClick={()=>{setEditItem(c);setShowForm(true);}} className="text-xs px-3 py-1.5 rounded-md bg-[#f4f6f9] text-slate-700 font-bold border border-[#e5def4]"><Ico e="✏" className="mr-1.5" />Editar anfitrión / referidos</button>}
+                {!c.eliminado && acc.papelera && <button onClick={()=>setData(p=>p.map(x=>x.id===c.id?{...x,eliminado:true}:x))} title="Mover a papelera" className="text-xs px-3 py-1.5 rounded-md bg-red-50 text-red-500 font-bold"><Ico e="🗑" /></button>}
+                {c.eliminado && acc.restaurar && <button onClick={()=>setData(p=>p.map(x=>x.id===c.id?{...x,eliminado:false}:x))} className="text-xs px-3 py-1.5 rounded-md bg-emerald-50 text-emerald-600 font-bold"><Ico e="♻" className="mr-1.5" />Restaurar</button>}
+                {c.eliminado && acc.borrarDefinitivo && <button onClick={()=>{if(confirm("¿Eliminar permanentemente? No se puede deshacer."))setData(p=>p.filter(x=>x.id!==c.id));}} className="text-xs px-3 py-1.5 rounded-md bg-red-100 text-red-600 font-bold"><Ico e="🗑" className="mr-1.5" />Definitivo</button>}
+              </div>); })()}
           </div>
         ):(
-          <ClientRow key={`db-${idx}-${type}-${String(c.id)}`} c={c} type={type} role={role} infoCobranza={cobranzaClientes ? cobranzaClientes[String(c.id)] : null} onStatusChange={(id,st)=>setData(p=>p.map(x=>x.id===id?{...x,estado:st}:x))} onEdit={c=>{setEditItem(c);setShowForm(true);}} onSchedule={c=>openSchedule(c)} onDelete={id=>setData(p=>p.map(x=>x.id===id?{...x,eliminado:true}:x))} onRestore={id=>setData(p=>p.map(x=>x.id===id?{...x,eliminado:false}:x))} onHardDelete={id=>setData(p=>p.filter(x=>x.id!==id))} inPapelera={showPapelera} onCall={onCallLog} onApptResult={handleApptResult} onSaveCallToHistorial={(id,entry)=>setData(p=>addHistorialEntry(p,id,entry))} onSaveNota={(id,texto)=>setData(p=>p.map(x=>x.id===id?agregarNota(x,texto,agente):x))} onToggleRoute={showRoute?toggleRoute:null} isInRoute={routeSel.includes(c.id)} agente={agente} onDeleteHistorial={(cid,ekey)=>setData(p=>deleteHistorialEntry(p,cid,ekey))} />
-        ))}
+          <ClientRow key={v2?`db-${type}-${String(c.id)}`:`db-${idx}-${type}-${String(c.id)}`} acciones={v2?accionesRegistroV2(v2.actor, c, type):null} c={c} type={type} role={role} infoCobranza={cobranzaClientes ? cobranzaClientes[String(c.id)] : null} onStatusChange={(id,st)=>setData(p=>p.map(x=>x.id===id?{...x,estado:st}:x))} onEdit={c=>{setEditItem(c);setShowForm(true);}} onSchedule={c=>openSchedule(c)} onDelete={id=>setData(p=>p.map(x=>x.id===id?{...x,eliminado:true}:x))} onRestore={id=>setData(p=>p.map(x=>x.id===id?{...x,eliminado:false}:x))} onHardDelete={id=>setData(p=>p.filter(x=>x.id!==id))} inPapelera={showPapelera} onCall={onCallLog} onApptResult={handleApptResult} onSaveCallToHistorial={(id,entry)=>setData(p=>addHistorialEntry(p,id,v2?{...entry, uid:v2.autor.uid, nombre:v2.autor.nombre}:entry))} onSaveNota={(id,texto)=>setData(p=>p.map(x=>x.id===id?agregarNota(x,texto,agente):x))} onToggleRoute={showRoute?toggleRoute:null} isInRoute={routeSel.includes(c.id)} agente={agente} onDeleteHistorial={(cid,ekey)=>setData(p=>deleteHistorialEntry(p,cid,ekey))} />
+        );})}
       </div>
-      {showForm && <Modal title={`${editItem?"Editar":"Nuevo"} — ${title}`} onClose={()=>{setShowForm(false);setEditItem(null);}}><ClientForm initial={editItem} type={type} onSave={saveNew} onClose={()=>{setShowForm(false);setEditItem(null);}} /></Modal>}
+      {v2 && pagV2 && <VerMasDB pag={pagV2} onMas={()=>setVisiblesV2(n=>n+(v2.pagina||30))} />}
+      {showForm && <Modal title={`${editItem?"Editar":"Nuevo"} — ${title}`} onClose={()=>{setShowForm(false);setEditItem(null);setDupV2(null);}}>{(()=>{
+        const form=<ClientForm initial={editItem} type={type} onSave={saveNew} onClose={()=>{setShowForm(false);setEditItem(null);}} />;
+        if(!v2) return form;
+        // v2: aviso de posible duplicado (nunca bloquea); el formulario sigue montado (oculto) → "Volver" conserva lo escrito
+        return <>{dupV2 && <AvisoDuplicadoDB duplicados={dupV2.dups} onVolver={()=>setDupV2(null)} onGuardar={()=>saveNew(dupV2.d, true)} />}
+          <div style={dupV2?{display:"none"}:undefined}>{form}</div></>;
+      })()}</Modal>}
       {scheduleClient && <Modal title="📅 Agendar en Google Calendar" onClose={()=>{setScheduleClient(null);setForceTipo(null);setDupServ(null);}}>{(()=>{
         const form=<AppointmentForm client={scheduleClient} forceTipo={forceTipo} loading={calLoading} onSave={handleSchedule} onClose={()=>{setScheduleClient(null);setForceTipo(null);}} agenteActivo={agente} />;
         if(!ACCESS_V2) return form;
@@ -8745,10 +8820,17 @@ function AppRoot() {
   // sin duplicar y sin mover/borrar el original). Solo staff (quien registra resultados).
   const conDistribucionV2=(st, appt)=>{
     if(!ACCESS_V2 || !v2User || !canRecordVisitResult(v2User.role)) return st;
-    const r=reconciliarDistribucionPorVenta(st.distribucion||[], appt);
+    // r1 Base de Datos: nunca borra; A) papelera con motivo · B/C) solo desvincula (ver ventaDistribucionV2)
+    const r=reconciliarDistribucionPorVenta(st.distribucion||[], appt, new Date(), { uid:v2User.uid, nombre:v2User.nombre });
     return r.accion!=="sin_cambios" && r.accion!=="omitido" ? {...st, distribucion:r.lista} : st;
   };
   const asegurarDistribucionPorVenta=(appt)=>setState(s=>conDistribucionV2(s, appt));   // venta en SERVICIO
+  // Base de Datos v2: las MISMAS props que recibe DBSection en legacy (DatabaseV2 solo agrega la configuración v2).
+  const propsBaseDatos=(sec)=>{
+    const base={ agregados:["agregado","Clientes Agregados"], referidos:["referido","Programa Referidos"], prospectos:["prospecto","Prospección"], distribucion:["distribucion","Bajo Distribución"] }[sec];
+    return { data:allData[sec], setData:fn=>setSection(sec,fn), type:base[0], title:base[1], onCallLog, role, allData, agente:agenteActivo, notify, setAppts, rolActivo:rolUsuario,
+      ...(sec==="distribucion"?{ cobranzaClientes:(state.cobranza||{}).clientesData||{} }:{}) };
+  };
   const sincronizarVentaAgenda=(appt)=>{
     if(!appt || appt._sincronizado) return;
     setState(s0=>{ const out=(s=>{
@@ -9176,10 +9258,18 @@ function AppRoot() {
               setSection={setSection} setAppts={setAppts} onCallLog={onCallLog} gcalLink={gcalLink} AppointmentForm={AppointmentForm} EntrevistaModal={EntrevistaModal} estadoLabel={STATUS_COLORS} />}
             {tab==="llamadas" && !(ACCESS_V2 && v2User && especialidadDe(v2User.role)) && <CallControl key={ACCESS_V2?(navIntent?.key||"llamadas"):undefined} data={allData} setData={setSection} onCallLog={onCallLog} role={role} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario}
               init={ACCESS_V2 && navIntent?.tab==="llamadas" ? navIntent : null} />}
-            {tab==="agregados" && <DBSection data={allData.agregados} setData={fn=>setSection("agregados",fn)} type="agregado" title="Clientes Agregados" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />}
-            {tab==="referidos" && <DBSection data={allData.referidos} setData={fn=>setSection("referidos",fn)} type="referido" title="Programa Referidos" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />}
-            {tab==="prospectos" && <DBSection data={allData.prospectos} setData={fn=>setSection("prospectos",fn)} type="prospecto" title="Prospección" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />}
-            {tab==="distribucion" && <DBSection data={allData.distribucion} setData={fn=>setSection("distribucion",fn)} type="distribucion" title="Bajo Distribución" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} cobranzaClientes={(state.cobranza||{}).clientesData||{}} />}
+            {tab==="agregados" && (ACCESS_V2 && v2User
+              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("agregados")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} />
+              : <DBSection data={allData.agregados} setData={fn=>setSection("agregados",fn)} type="agregado" title="Clientes Agregados" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />)}
+            {tab==="referidos" && (ACCESS_V2 && v2User
+              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("referidos")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} />
+              : <DBSection data={allData.referidos} setData={fn=>setSection("referidos",fn)} type="referido" title="Programa Referidos" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />)}
+            {tab==="prospectos" && (ACCESS_V2 && v2User
+              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("prospectos")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} />
+              : <DBSection data={allData.prospectos} setData={fn=>setSection("prospectos",fn)} type="prospecto" title="Prospección" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />)}
+            {tab==="distribucion" && (ACCESS_V2 && v2User
+              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("distribucion")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} />
+              : <DBSection data={allData.distribucion} setData={fn=>setSection("distribucion",fn)} type="distribucion" title="Bajo Distribución" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} cobranzaClientes={(state.cobranza||{}).clientesData||{}} />)}
             {tab==="reclutamiento" && <RecruitmentSection key={ACCESS_V2?(navIntent?.key||"reclutamiento"):undefined} init={ACCESS_V2 && navIntent?.tab==="reclutamiento" ? navIntent : null} reclutamiento={state.reclutamiento||[]} setReclutamiento={(fn)=>setState(s=>({...s,reclutamiento:typeof fn==="function"?fn(s.reclutamiento||[]):fn}))} agente={agenteActivo} notify={notify} rolActivo={rolUsuario} setAppts={setAppts} socios={state.socios||[]} setSocios={fn=>setSection("socios",fn)} docsSocios={state.docsSocios||{}} setDocsSocios={fn=>setSection("docsSocios",fn)} />}
             {tab==="cobranza" && <CobranzaSection distribucion={(state.distribucion||[]).filter(c=>!c.eliminado)} cobranza={state.cobranza||{}} setCobranza={(fn)=>setSection("cobranza",fn)} />}
             {tab==="catalogo" && <BuscadorCodigos catalogoCustom={state.catalogoCustom||{}} setCatalogoCustom={(fn)=>setState(st=>({...st,catalogoCustom:typeof fn==="function"?fn(st.catalogoCustom||{}):fn}))} puedeEditar={canDo("catalogo.edit")} />}
