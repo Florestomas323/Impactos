@@ -22,8 +22,8 @@ import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEv
 import { contarVentasDemosV2, serviceMetricDate, serviciosRealizados, ventaServicioCartucho, ventasServicioDe, apptsDelGrupo, ultimoCambioCartucho, tiempoHumano, alertasCartucho, servicioDesdeCartucho, duplicateServiceCandidate, candidatosServicio, estadoServicio, ESTADO_SERVICIO } from "./services/serviceV2";
 import { ServicioAccionesV2, ServiciosV2 } from "./components/servicio/ServicioV2";
 import { DatabaseV2, AvisoDuplicadoDB, VerMasDB } from "./components/database/DatabaseV2";
-import { coincideBusquedaV2, paginar as paginarDB, candidatoDuplicado as candidatoDuplicadoDB, candidatosDuplicadoAnfitrion, accionesRegistroV2, ventaDesdeRegistro, camposVenta, clavesReferidos, correccionDesdeRegistro, ventaVisibleDistribucion, ultimaVentaOrigen } from "./services/databaseV2";
-import { reconciliarDistribucionPorVenta } from "./services/ventaDistribucionV2";
+import { coincideBusquedaV2, paginar as paginarDB, candidatoDuplicado as candidatoDuplicadoDB, candidatosDuplicadoAnfitrion, accionesRegistroV2, ventaDesdeRegistro, camposVenta, clavesReferidos, correccionDesdeRegistro, ventaVisibleDistribucion, ultimaVentaOrigen, seccionDeTipo, camposResultadoFisico } from "./services/databaseV2";
+import { reconciliarDistribucionPorVenta, aplicarVentaEnEstado, TEXTO_MOTIVO_VINCULO } from "./services/ventaDistribucionV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
 import { RutasEquipoV2 } from "./components/rutas/RutasEquipoV2";
@@ -2939,7 +2939,8 @@ function ClientRow({ acciones=null, c, onStatusChange, onEdit, onSchedule, onDel
   if(!_idOk){
     return null;
   }
-  const s=STATUS_COLORS[c.estado]||STATUS_COLORS.sin_estado;
+  // v2 · Distribución que llegó por una venta y sin estado manual: se VE como "Cliente / Venta" (verde). Solo UI: no escribe estado.
+  const s=(!!acciones && type==="distribucion" && !c.estado && ventaVisibleDistribucion(c)) ? {...STATUS_COLORS.verde, label:"Cliente / Venta"} : (STATUS_COLORS[c.estado]||STATUS_COLORS.sin_estado);
   const isCita=c.estado==="verde";
   // v2: el resultado FÍSICO (cita) solo lo registra el staff; el de llamada sigue para todos. Legacy: acciones=null → siempre.
   const puedeResultadoFisico = !acciones || acciones.resultadoFisico !== false;
@@ -3496,6 +3497,12 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
   const pagV2 = v2 ? paginarDB(filtered, visiblesV2) : null;
   const listaRender = v2 ? pagV2.items : filtered;
   const [dupV2,setDupV2]=useState(null);   // v2: {d, dups} → aviso de posible duplicado (Volver / Guardar de todos modos)
+  // v2: dice qué pasó con Distribución tras una venta (creado / vinculado y por qué). Nunca silencioso.
+  const avisarVentaV2=(info, nombre)=>{
+    if(!info) return;
+    if(info.accion==="creado") setCalMsg(`💰 Venta registrada · ${nombre||"Cliente"} quedó en Distribución.`);
+    else if(info.accion==="actualizado"||info.accion==="sin_cambios") setCalMsg(`💰 Venta registrada · vinculada a «${info.nombre||"cliente existente"}» en Distribución (${TEXTO_MOTIVO_VINCULO[info.motivo]||"ya existía"}).`);
+  };
   const toggleRoute=id=>setRouteSel(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
   const routeList=filtered.filter(c=>routeSel.includes(c.id));
   const saveNew=(d, forzar=false)=>{
@@ -3572,16 +3579,18 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
     const montoNum = id==="demo_venta" ? Number(monto)||0 : 0;
     if(v2 && !accionesRegistroV2(v2.actor, c, type).resultadoFisico) return;   // guard v2: telemarketing no registra resultado físico
     if(v2 && id!=="demo_venta"){
-      // v2: la corrección sella su autor; si había una venta de registro vigente, se reconcilia Distribución con el MISMO id
+      // v2: corrección + resultado en UNA transición (registro + Distribución). La misma `aplicar` lleva el sello del
+      // corrector, venta:false / sin ventaRegistroId si había venta, y los campos del resultado (igual que legacy).
+      // NO hay otro setData después; seguimiento/reset solo abren la agenda.
       const { patch, reconciliar } = correccionDesdeRegistro(c, id, v2.autor, new Date());
-      setData(p=>p.map(x=>x.id===c.id?{...x, ...patch}:x));
-      if(reconciliar && v2.onVenta) v2.onVenta(reconciliar);
+      v2.ventaAtomica(seccionDeTipo(type), c.id, x=>({...x, ...patch, ...camposResultadoFisico(id, detail, x)}), reconciliar);
+      if(id==="seguimiento") openSchedule(c,"llamada");
+      else if(id==="reset") openSchedule(c,"reset");
     }
-    if(v2 && id==="demo_venta"){
-      // v2: resultBy* en el registro + Venta → Distribución por el MISMO camino (no es una cita: no duplica Venta/Volumen)
+    else if(v2 && id==="demo_venta"){
+      // v2: resultBy* en el registro + Venta → Distribución en UNA transición (monto/producto opcionales; no duplica Venta/Volumen)
       const { registro, venta } = ventaDesdeRegistro(c, type, { monto, producto, detail, cartucho_meses }, v2.autor, new Date());
-      setData(p=>p.map(x=>x.id===c.id?{...x, ...registro, id:x.id}:x));
-      if(v2.onVenta) v2.onVenta(venta);
+      avisarVentaV2(v2.ventaAtomica(seccionDeTipo(type), c.id, x=>({...x, ...registro, id:x.id}), venta), c.nombre);
     }
     else if(id==="demo_venta")      setData(p=>p.map(x=>x.id===c.id?{...x,venta:true, resultado:"demo_venta",    resultado_detalle:detail||x.resultado_detalle, ultimo_monto_venta:montoNum||x.ultimo_monto_venta, ultimo_producto:producto||x.ultimo_producto, ultimo_cartucho_meses:cartucho_meses||x.ultimo_cartucho_meses}:x));
     else if(id==="demo_no_venta")  setData(p=>p.map(x=>x.id===c.id?{...x,venta:false,resultado:"demo_no_venta", resultado_detalle:detail||x.resultado_detalle}:x));
@@ -3699,14 +3708,17 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
                   onApptResult={(cc,rid,detail="",monto="",producto="",cartucho_meses=0)=>{
                     if(v2 && !accRefV2.resultadoFisico) return;   // guard v2: telemarketing no registra resultado físico
                     if(v2 && rid!=="demo_venta"){
+                      // v2: corrección + campos del resultado (MISMOS que la tarjeta normal) en UNA transición; sin patchAnf después
                       const { patch, reconciliar } = correccionDesdeRegistro(c, rid, v2.autor, new Date());
-                      patchAnf(patch); if(reconciliar && v2.onVenta) v2.onVenta(reconciliar);
+                      v2.ventaAtomica("referidos", c.id, anf=>({...anf, ...patch, ...camposResultadoFisico(rid, detail, anf)}), reconciliar);
+                      if(rid==="seguimiento") openSchedule(anfCard,"llamada");
+                      else if(rid==="reset") openSchedule(anfCard,"reset");
+                      return;
                     }
                     if(v2 && rid==="demo_venta"){
-                      // v2: mismo flujo que el resto (resultBy* + Venta → Distribución). Origen: el anfitrión (sin índice).
+                      // v2: mismo flujo que el resto (resultBy* + Venta → Distribución, atómico). Origen: el anfitrión (sin índice).
                       const { registro, venta } = ventaDesdeRegistro({...anfCard, id:c.id}, "referido", { monto, producto, detail, cartucho_meses }, v2.autor, new Date());
-                      patchAnf(camposVenta(registro));
-                      if(v2.onVenta) v2.onVenta(venta);
+                      avisarVentaV2(v2.ventaAtomica("referidos", c.id, anf=>({...anf, ...camposVenta(registro)}), venta), anfCard.nombre);
                       return;
                     }
                     const patch = rid==="demo_venta"?{venta:true,resultado:"demo_venta",resultado_detalle:detail}
@@ -3780,15 +3792,20 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
                     onCall={onCallLog}
                     onApptResult={(cc,rid,detail="",monto="",producto="",cartucho_meses=0)=>{
                       if(v2 && !accRefV2.resultadoFisico) return;   // guard v2: telemarketing no registra resultado físico
+                      // v2: cambio del referido i dentro del documento del anfitrión (misma forma que patchRef)
+                      const conRef=(patch)=>(anf)=>{ const refs=[...lst(anf.referidos)]; refs[i]={...refs[i],...patch}; return {...anf,referidos:refs}; };
                       if(v2 && rid!=="demo_venta"){
+                        // v2: corrección + campos del resultado (MISMOS que la tarjeta normal) en UNA transición; sin patchRef después
                         const { patch, reconciliar } = correccionDesdeRegistro(refCard, rid, v2.autor, new Date());
-                        patchRef(patch); if(reconciliar && v2.onVenta) v2.onVenta(reconciliar);
+                        v2.ventaAtomica("referidos", c.id, conRef({...patch, ...camposResultadoFisico(rid, detail, refCard)}), reconciliar);
+                        if(rid==="seguimiento") openSchedule(refCard,"llamada");
+                        else if(rid==="reset") openSchedule(refCard,"reset");
+                        return;
                       }
                       if(v2 && rid==="demo_venta"){
-                        // v2: origen = anfitrión + índice REAL del referido (refCard.id = "anf::i")
+                        // v2: origen = anfitrión + índice REAL del referido (refCard.id = "anf::i"), atómico
                         const { registro, venta } = ventaDesdeRegistro(refCard, "referido", { monto, producto, detail, cartucho_meses }, v2.autor, new Date());
-                        patchRef(camposVenta(registro));
-                        if(v2.onVenta) v2.onVenta(venta);
+                        avisarVentaV2(v2.ventaAtomica("referidos", c.id, conRef(camposVenta(registro)), venta), refCard.nombre);
                         return;
                       }
                       const patch = rid==="demo_venta"?{venta:true,resultado:"demo_venta",resultado_detalle:detail}
@@ -8837,6 +8854,14 @@ function AppRoot() {
     return r.accion!=="sin_cambios" && r.accion!=="omitido" ? {...st, distribucion:r.lista} : st;
   };
   const asegurarDistribucionPorVenta=(appt)=>setState(s=>conDistribucionV2(s, appt));   // venta en SERVICIO
+  // v2 · Venta / corrección desde la TARJETA: registro de origen + Distribución en UNA sola transición
+  // de estado (mismo flush, mismo lote). Devuelve qué pasó con Distribución para avisarlo en pantalla.
+  const ventaAtomicaV2=(seccion, recordId, aplicar, evento)=>{
+    let info=null;
+    const staff = ACCESS_V2 && v2User && canRecordVisitResult(v2User.role);
+    setState(s=>{ const r=aplicarVentaEnEstado(s, seccion, recordId, aplicar, staff?evento:null, new Date(), v2User?{ uid:v2User.uid, nombre:v2User.nombre }:null); info=r.info; return r.state; });
+    return info;
+  };
   // Base de Datos v2: las MISMAS props que recibe DBSection en legacy (DatabaseV2 solo agrega la configuración v2).
   const propsBaseDatos=(sec)=>{
     const base={ agregados:["agregado","Clientes Agregados"], referidos:["referido","Programa Referidos"], prospectos:["prospecto","Prospección"], distribucion:["distribucion","Bajo Distribución"] }[sec];
@@ -9271,16 +9296,16 @@ function AppRoot() {
             {tab==="llamadas" && !(ACCESS_V2 && v2User && especialidadDe(v2User.role)) && <CallControl key={ACCESS_V2?(navIntent?.key||"llamadas"):undefined} data={allData} setData={setSection} onCallLog={onCallLog} role={role} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario}
               init={ACCESS_V2 && navIntent?.tab==="llamadas" ? navIntent : null} />}
             {tab==="agregados" && (ACCESS_V2 && v2User
-              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("agregados")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} />
+              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("agregados")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} ventaAtomica={ventaAtomicaV2} />
               : <DBSection data={allData.agregados} setData={fn=>setSection("agregados",fn)} type="agregado" title="Clientes Agregados" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />)}
             {tab==="referidos" && (ACCESS_V2 && v2User
-              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("referidos")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} />
+              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("referidos")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} ventaAtomica={ventaAtomicaV2} />
               : <DBSection data={allData.referidos} setData={fn=>setSection("referidos",fn)} type="referido" title="Programa Referidos" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />)}
             {tab==="prospectos" && (ACCESS_V2 && v2User
-              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("prospectos")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} />
+              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("prospectos")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} ventaAtomica={ventaAtomicaV2} />
               : <DBSection data={allData.prospectos} setData={fn=>setSection("prospectos",fn)} type="prospecto" title="Prospección" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} />)}
             {tab==="distribucion" && (ACCESS_V2 && v2User
-              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("distribucion")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} />
+              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("distribucion")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} ventaAtomica={ventaAtomicaV2} />
               : <DBSection data={allData.distribucion} setData={fn=>setSection("distribucion",fn)} type="distribucion" title="Bajo Distribución" onCallLog={onCallLog} role={role} allData={allData} agente={agenteActivo} notify={notify} setAppts={setAppts} rolActivo={rolUsuario} cobranzaClientes={(state.cobranza||{}).clientesData||{}} />)}
             {tab==="reclutamiento" && <RecruitmentSection key={ACCESS_V2?(navIntent?.key||"reclutamiento"):undefined} init={ACCESS_V2 && navIntent?.tab==="reclutamiento" ? navIntent : null} reclutamiento={state.reclutamiento||[]} setReclutamiento={(fn)=>setState(s=>({...s,reclutamiento:typeof fn==="function"?fn(s.reclutamiento||[]):fn}))} agente={agenteActivo} notify={notify} rolActivo={rolUsuario} setAppts={setAppts} socios={state.socios||[]} setSocios={fn=>setSection("socios",fn)} docsSocios={state.docsSocios||{}} setDocsSocios={fn=>setSection("docsSocios",fn)} />}
             {tab==="cobranza" && <CobranzaSection distribucion={(state.distribucion||[]).filter(c=>!c.eliminado)} cobranza={state.cobranza||{}} setCobranza={(fn)=>setSection("cobranza",fn)} />}
