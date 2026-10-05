@@ -22,7 +22,7 @@ import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEv
 import { contarVentasDemosV2, serviceMetricDate, serviciosRealizados, ventaServicioCartucho, ventasServicioDe, apptsDelGrupo, ultimoCambioCartucho, tiempoHumano, alertasCartucho, servicioDesdeCartucho, duplicateServiceCandidate, candidatosServicio, estadoServicio, ESTADO_SERVICIO } from "./services/serviceV2";
 import { ServicioAccionesV2, ServiciosV2 } from "./components/servicio/ServicioV2";
 import { DatabaseV2, AvisoDuplicadoDB, VerMasDB } from "./components/database/DatabaseV2";
-import { coincideBusquedaV2, paginar as paginarDB, candidatoDuplicado as candidatoDuplicadoDB, candidatosDuplicadoAnfitrion, accionesRegistroV2, ventaDesdeRegistro, camposVenta, clavesReferidos, correccionDesdeRegistro } from "./services/databaseV2";
+import { coincideBusquedaV2, paginar as paginarDB, candidatoDuplicado as candidatoDuplicadoDB, candidatosDuplicadoAnfitrion, accionesRegistroV2, ventaDesdeRegistro, camposVenta, clavesReferidos, correccionDesdeRegistro, ventaVisibleDistribucion, ultimaVentaOrigen } from "./services/databaseV2";
 import { reconciliarDistribucionPorVenta } from "./services/ventaDistribucionV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
@@ -3023,7 +3023,7 @@ function ClientRow({ acciones=null, c, onStatusChange, onEdit, onSchedule, onDel
             💵 ${Number(cbInfo.saldo||0).toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:0})}{cbInfo.pagoMensual?` · $${Number(cbInfo.pagoMensual).toLocaleString("en-US",{maximumFractionDigits:0})}/mes`:""}
           </span>
         )}
-        {c.resultado==="venta" && <span className="text-sm shrink-0" title="Venta"><Ico e="💰" /></span>}
+        {(c.resultado==="venta" || (!!acciones && type==="distribucion" && ventaVisibleDistribucion(c))) && <span className="text-sm shrink-0" title="Venta"><Ico e="💰" /></span>}
         {seguimientoVencido && !inPapelera && <span className="text-sm shrink-0" title="Seguimiento vencido"><Ico e="⏰" /></span>}
         {onToggleRoute && (()=>{
           // Solo califica para ruta si tiene dirección exacta (no solo ciudad)
@@ -3143,6 +3143,18 @@ function ClientRow({ acciones=null, c, onStatusChange, onEdit, onSchedule, onDel
             {c.resultado && RESULTADO_STYLE[c.resultado] && (
               <div><span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-md" style={RESULTADO_STYLE[c.resultado].style}>{RESULTADO_STYLE[c.resultado].label}</span></div>
             )}
+            {/* v2 · Distribución que llegó por una venta: solo indicador visual (no hay `resultado`; la venta se cuenta en su origen) */}
+            {!!acciones && type==="distribucion" && ventaVisibleDistribucion(c) && (()=>{ const vo=ultimaVentaOrigen(c); return (
+              <div className="space-y-1">
+                <div><span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">💰 Venta registrada</span></div>
+                {vo && <div className="text-xs text-slate-600 bg-emerald-50/50 rounded-lg px-2 py-1">
+                  <div className="font-bold text-emerald-800">Venta de origen{vo.tipo==="servicio"?" (servicio)":""}</div>
+                  {vo.fecha && <div>📅 {String(vo.fecha).replace("T"," ").slice(0,16)}</div>}
+                  {vo.producto && <div>📦 {vo.producto}</div>}
+                  {vo.monto>0 && <div>💵 ${vo.monto.toLocaleString("en-US")}</div>}
+                  {vo.por && <div>👤 Registrado por {vo.por}</div>}
+                </div>}
+              </div>); })()}
             {c.resultado_detalle && <div className="text-[#5b21b6] text-xs bg-[#5b21b6]/6 rounded-lg px-2 py-1"><Ico e="📝" className="mr-1.5" />{c.resultado_detalle}</div>}
           </div>
 
