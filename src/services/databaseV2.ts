@@ -3,7 +3,7 @@
 // venta desde la tarjeta del cliente. Sin React, sin Firestore: todo testeable.
 // NO reemplaza findDuplicate/coincideBusqueda legacy (los usa producción e importación).
 import { trazaRegistro } from "./apptTrace";
-import { canRecordVisitResult } from "./agendaV2";
+import { canRecordVisitResult, fechaLocal } from "./agendaV2";
 
 export const lst = (v: any): any[] => (Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : []);
 const vacio = (v: any) => v === undefined || v === null || String(v).trim() === "";
@@ -176,4 +176,25 @@ export function correccionDesdeRegistro(registro: any, nuevoResultado: string, a
   patch.venta = false;
   patch.ventaRegistroId = undefined;                    // la venta terminó (el store elimina el campo)
   return { patch, reconciliar: { id: String(registro.ventaRegistroId), tipo: "cita", resultado: nuevoResultado } };
+}
+
+// ── Distribución: señal VISUAL de venta (solo UI; no escribe nada ni toca métricas) ──
+// Un registro de Distribución que llegó por una venta no tiene `resultado` (la venta se cuenta una
+// sola vez desde su evento original). Para que no parezca "sin resultado", la UI v2 lo reconoce si:
+//   venta === true · createdFrom === "venta_distribucion" · ventasOrigen con al menos una venta.
+// Excepción: si fue auto-creado por una venta y TODAS sus ventas se corrigieron (ventasOrigen vacío),
+// ya no hay venta vigente → no se muestra.
+export function ventaVisibleDistribucion(c: any): boolean {
+  if (!c || !vacio(c.resultado)) return false;                      // con resultado propio manda el resultado
+  const ventas = lst(c.ventasOrigen);
+  if (ventas.length > 0) return true;
+  if (c.createdFrom === "venta_distribucion" && Array.isArray(c.ventasOrigen)) return false;   // venta corregida
+  return c.venta === true || c.createdFrom === "venta_distribucion";
+}
+// Última venta de origen (para "Detalles completos"): fecha, producto, monto, registrado por.
+export function ultimaVentaOrigen(c: any) {
+  const ventas = lst(c?.ventasOrigen);
+  const v = ventas[ventas.length - 1];
+  if (!v) return null;
+  return { fecha: v.fecha ? fechaLocal(v.fecha) : "", producto: v.producto || "", monto: Number(v.monto) || 0, por: v.porNombre || "", tipo: v.tipo || "" };   // hora LOCAL
 }
