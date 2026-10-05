@@ -203,7 +203,7 @@ test("20-25 · Venta desde la tarjeta: resultByUid/Name/At, historial, Distribuc
   assert.deepEqual(m, { demos: 1, ventas: 1, volumen: 2500, cierre: 100 });
   assert.equal(venta.tipo, "cita"); assert.ok(!("_type" in venta));
   assert.ok(APP.includes("const { registro, venta } = ventaDesdeRegistro(c, type, { monto, producto, detail, cartucho_meses }, v2.autor, new Date());"));
-  assert.ok(APP.includes("if(v2.onVenta) v2.onVenta(venta);"));
+  assert.ok(APP.includes("avisarVentaV2(v2.ventaAtomica(seccionDeTipo(type), c.id, x=>({...x, ...registro, id:x.id}), venta), c.nombre);"));   // atómico
   assert.ok(APP.includes("v2?{...entry, uid:v2.autor.uid, nombre:v2.autor.nombre}:entry"));                 // historial con identidad real
   assert.ok(APP.includes(`else if(id==="demo_venta")      setData(p=>p.map(x=>x.id===c.id?{...x,venta:true, resultado:"demo_venta",`));   // legacy intacto
 });
@@ -221,7 +221,7 @@ test("26 · Clave estable por id en v2; legacy conserva la clave por índice", (
 
 test("Montaje: v2 → DatabaseV2 (envuelve DBSection con la configuración v2); legacy → DBSection con las props de siempre", () => {
   for (const sec of ["agregados", "referidos", "prospectos", "distribucion"]) {
-    assert.ok(APP.includes(`{tab==="${sec}" && (ACCESS_V2 && v2User\n              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("${sec}")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} />\n              : <DBSection data={allData.${sec}} setData={fn=>setSection("${sec}",fn)}`), sec);
+    assert.ok(APP.includes(`{tab==="${sec}" && (ACCESS_V2 && v2User\n              ? <DatabaseV2 Base={DBSection} baseProps={propsBaseDatos("${sec}")} v2User={v2User} can={canDo} onVenta={asegurarDistribucionPorVenta} ventaAtomica={ventaAtomicaV2} />\n              : <DBSection data={allData.${sec}} setData={fn=>setSection("${sec}",fn)}`), sec);
   }
   const ui = fs.readFileSync(new URL("../src/components/database/DatabaseV2.tsx", import.meta.url), "utf8");
   assert.ok(ui.includes("return <Base {...baseProps} v2={v2} />;"));
@@ -289,7 +289,7 @@ test("R4 · Venta desde el ANFITRIÓN: resultBy*, monto/producto/meses en el doc
   assert.deepEqual([venta.sourceSection, venta.sourceRecordId, "sourceRefIndex" in venta, venta.nombre, venta.telefono, venta.monto, venta.producto], ["referidos", "anf1", false, "Rita Gómez", "2105550000", 1800, "Purificador"]);
   const dist = distribucionDesdeVenta([], venta, NOW);
   assert.deepEqual([dist.accion, dist.lista[0].sourceSection, dist.lista[0].sourceRecordId, dist.lista[0].cuenta], ["creado", "referidos", "anf1", "RP-5"]);
-  assert.ok(bloqueReferidos().includes('const { registro, venta } = ventaDesdeRegistro({...anfCard, id:c.id}, "referido", { monto, producto, detail, cartucho_meses }, v2.autor, new Date());\n                      patchAnf(camposVenta(registro));'));
+  assert.ok(bloqueReferidos().includes('const { registro, venta } = ventaDesdeRegistro({...anfCard, id:c.id}, "referido", { monto, producto, detail, cartucho_meses }, v2.autor, new Date());\n                      avisarVentaV2(v2.ventaAtomica("referidos", c.id, anf=>({...anf, ...camposVenta(registro)}), venta), anfCard.nombre);'));
 });
 
 test("R5 · Venta desde un REFERIDO individual: resultBy*, sourceRecordId = anfitrión, sourceRefIndex real; entra a Distribución sin duplicar", () => {
@@ -307,7 +307,7 @@ test("R5 · Venta desde un REFERIDO individual: resultBy*, sourceRecordId = anfi
   // métricas: una sola venta (historial del referido); ni la pseudo-venta ni Distribución suman
   const m = contarVentasDemosV2({ appts: [], clientes: [{ historial: [{ cita_resultado: "demo_venta", fecha: "2026-10-02", monto: 950 }] }, d1.lista[0]], enP: () => true });
   assert.deepEqual([m.ventas, m.volumen, m.demos], [1, 950, 1]);
-  assert.ok(bloqueReferidos().includes('const { registro, venta } = ventaDesdeRegistro(refCard, "referido", { monto, producto, detail, cartucho_meses }, v2.autor, new Date());\n                        patchRef(camposVenta(registro));'));
+  assert.ok(bloqueReferidos().includes('const { registro, venta } = ventaDesdeRegistro(refCard, "referido", { monto, producto, detail, cartucho_meses }, v2.autor, new Date());\n                        avisarVentaV2(v2.ventaAtomica("referidos", c.id, conRef(camposVenta(registro)), venta), refCard.nombre);'));
   // historial con autor real (anfitrión y referido)
   assert.ok(bloqueReferidos().includes("historial:[...lst(anf.historial),v2?{...entry, uid:v2.autor.uid, nombre:v2.autor.nombre}:entry]"));
   assert.ok(bloqueReferidos().includes("historial:[...lst(refs[i].historial),v2?{...entry, uid:v2.autor.uid, nombre:v2.autor.nombre}:entry]"));
@@ -390,7 +390,7 @@ test("F5-F10 · Venta desde tarjeta → Distribución con id estable; correcció
   assert.notEqual(ventaDesdeRegistro(tras, "agregado", { monto: 1 }, { uid: "sup1", nombre: "Eva" }, new Date(T1.getTime() + 1000)).venta.id, venta.id);
   // App: misma reconciliación (conDistribucionV2) para tarjeta, anfitrión y referido; sin appts
   assert.ok(bloqueHandle().includes("const { patch, reconciliar } = correccionDesdeRegistro(c, id, v2.autor, new Date());"));
-  assert.ok(bloqueHandle().includes("if(reconciliar && v2.onVenta) v2.onVenta(reconciliar);"));
+  assert.ok(bloqueHandle().includes("v2.ventaAtomica(seccionDeTipo(type), c.id, x=>({...x, ...patch, ...camposResultadoFisico(id, detail, x)}), reconciliar);"));   // atómico
   assert.ok(bloqueReferidos().includes("const { patch, reconciliar } = correccionDesdeRegistro(c, rid, v2.autor, new Date());"));
   assert.ok(bloqueReferidos().includes("const { patch, reconciliar } = correccionDesdeRegistro(refCard, rid, v2.autor, new Date());"));
   assert.equal(/setAppts\(/.test(bloqueHandle()), false);                                                  // no crea citas
@@ -491,4 +491,278 @@ test("D1-D6 · Distribución por venta: indicador visual v2 sin `resultado`; mé
   assert.equal(ver(null, "distribucion", dist), false);                                              // legacy: sin 💰 nuevo (igual que antes)
   assert.equal(ver({}, "distribucion", dist), true);                                                 // v2: 💰
   assert.equal(ver(null, "agregado", { resultado: "venta" }), true);                                 // legacy conserva su 💰
+});
+
+// ════════ Bug confirmado: Demo / venta SIN monto ni producto → Distribución (flujo de ESTADO real) ════════
+import { aplicarVentaEnEstado, telefonoUtil, cuentaUtil, buscarEnDistribucionConMotivo, telefonosUtiles } from "../src/services/ventaDistribucionV2";
+import { camposResultadoFisico, lst } from "../src/services/databaseV2";
+// Mismo cuerpo que App.ventaAtomicaV2 + DBSection.handleApptResult (v2, demo_venta): UNA transición de estado.
+const SUPER = { uid: "sa1", nombre: "Super Admin" };
+const confirmarVenta = (state: any, sec: string, type: string, recId: string, datos: any, now = NOW) => {
+  const c = state[sec].find((x: any) => x.id === recId);
+  const { registro, venta } = ventaDesdeRegistro(c, type, { detail: "", cartucho_meses: 0, ...datos }, SUPER, now);
+  return aplicarVentaEnEstado(state, sec, recId, (x: any) => ({ ...x, ...registro, id: x.id }), venta, now, SUPER);
+};
+const ctxSuper = { uid: "sa1", role: "super_admin", appId: "impactos", nombre: "Super Admin" } as any;
+const docsDe = (st: any) => { const d = emptyDocs(); for (const sec of ["agregados", "prospectos", "distribucion", "referidos"]) for (const r of st[sec] || []) d.records[String(r.id)] = { ...r, section: sec, appId: "impactos" }; return d; };
+
+test("B1/B9/B10/B11/B12 · Agregado + Demo/venta con monto \"\" y producto \"\": fuente + Distribución en el MISMO estado; diffState = 2 SET, sin DELETE ni blocked", () => {
+  const inicial = { agregados: [{ id: "a1", nombre: "Prueba Sin Producto", telefono: "2145559999", estado: "verde" }], distribucion: [] as any[] };
+  const { state, info } = confirmarVenta(inicial, "agregados", "agregado", "a1", { monto: "", producto: "" });
+  assert.equal(state.agregados[0].resultado, "demo_venta");                                   // fuente
+  assert.equal(state.agregados[0].venta, true);
+  assert.equal(state.distribucion.length, 1);                                                 // Distribución, mismo estado final
+  assert.deepEqual([state.distribucion[0].telefono, state.distribucion[0].venta, state.distribucion[0].ventasOrigen.length], ["2145559999", true, 1]);
+  assert.equal(state.distribucion[0].ventasOrigen[0].apptId, state.agregados[0].ventaRegistroId);
+  assert.equal("resultado" in state.distribucion[0], false);
+  assert.deepEqual([info!.accion, info!.nombre], ["creado", "Prueba Sin Producto"]);
+  // el estado final pasa por el store: ambos SET (registro original + nuevo de Distribución), sin DELETE ni blocked
+  const { ops, blocked } = diffState(inicial, state, docsDe(inicial), ctxSuper);
+  assert.deepEqual(ops.map((o: any) => [o.kind, o.col, o.id]).sort(), [["set", "records", "a1"], ["set", "records", state.distribucion[0].id]].sort());
+  assert.equal(ops.some((o: any) => o.kind === "delete"), false);
+  assert.equal(blocked.length, 0);
+  const opDist: any = ops.find((o: any) => o.id === state.distribucion[0].id);
+  assert.deepEqual([opDist.data.section, opDist.data.telefono, opDist.data.venta, opDist.data.ventasOrigen.length, "resultado" in opDist.data], ["distribucion", "2145559999", true, 1, false]);
+  const opFuente: any = ops.find((o: any) => o.id === "a1");
+  assert.deepEqual([opFuente.data.section, opFuente.data.resultado, opFuente.data.resultByUid], ["agregados", "demo_venta", "sa1"]);
+  // ningún undefined viaja a Firestore (lo rechazaría)
+  assert.equal(JSON.stringify(opDist.data).includes("undefined"), false);
+  for (const v of Object.values(opFuente.data)) assert.notEqual(v, undefined);
+});
+
+test("B2 · monto 0 y producto vacío → Distribución", () => {
+  const { state } = confirmarVenta({ agregados: [{ id: "a1", nombre: "Cero", telefono: "2145557777", estado: "verde" }], distribucion: [] }, "agregados", "agregado", "a1", { monto: 0, producto: "" });
+  assert.deepEqual([state.distribucion.length, state.distribucion[0].telefono], [1, "2145557777"]);
+});
+
+test("B3 · Prospecto + Demo/venta sin monto ni producto → Distribución (igual que Agregados)", () => {
+  const ini = { prospectos: [{ id: "p1", nombre: "Prospecto Sin Producto", telefono: "2145556666", estado: "verde" }], distribucion: [] };
+  const { state, info } = confirmarVenta(ini, "prospectos", "prospecto", "p1", { monto: "", producto: "" });
+  assert.deepEqual([state.prospectos[0].resultado, state.distribucion.length, state.distribucion[0].sourceSection, state.distribucion[0].sourceRecordId, info!.accion], ["demo_venta", 1, "prospectos", "p1", "creado"]);
+  const { ops } = diffState(ini, state, docsDe(ini), ctxSuper);
+  assert.deepEqual(ops.map((o: any) => o.kind), ["set", "set"]);
+});
+
+test("B4/B5 · Con producto también entra; ambos caminos producen la MISMA estructura esencial", () => {
+  const ini = (id: string, tel: string) => ({ agregados: [{ id, nombre: "Cliente " + id, telefono: tel, estado: "verde" }], distribucion: [] });
+  const sin = confirmarVenta(ini("a1", "2145551111"), "agregados", "agregado", "a1", { monto: "", producto: "" }).state.distribucion[0];
+  const con = confirmarVenta(ini("a2", "2145552222"), "agregados", "agregado", "a2", { monto: 1800, producto: "Purificador" }).state.distribucion[0];
+  const esencia = (d: any) => ({ claves: ["nombre", "telefono", "sourceSection", "sourceRecordId", "createdFrom", "ventaOrigenApptId", "venta", "fuente"].map((k) => k in d), venta: d.venta, createdFrom: d.createdFrom, refs: d.ventasOrigen.length, sec: d.sourceSection });
+  assert.deepEqual(esencia(sin), esencia(con));
+  assert.deepEqual([sin.producto, con.producto, "monto" in sin.ventasOrigen[0], con.ventasOrigen[0].monto], ["", "Purificador", false, 1800]);   // B11/B12 · opcionales
+});
+
+test("B6/B7/B8 · Teléfono nuevo crea; teléfono o cuenta existente vincula sin duplicar; un RELLENO no vincula", () => {
+  const base = { agregados: [{ id: "a1", nombre: "Nuevo Cliente", telefono: "2145559999", cuenta: "", estado: "verde" }], distribucion: [{ id: "d1", nombre: "Cliente Existente", telefono: "214-555-9999", cuenta: "RP-4521" }] };
+  // 6 · teléfono nuevo
+  const nuevo = confirmarVenta({ ...base, distribucion: [] }, "agregados", "agregado", "a1", { monto: "", producto: "" });
+  assert.equal(nuevo.state.distribucion.length, 1);
+  // 7 · teléfono existente → vincula, no duplica, y avisa por qué
+  const v1 = confirmarVenta(base, "agregados", "agregado", "a1", { monto: "", producto: "" });
+  assert.deepEqual([v1.state.distribucion.length, v1.state.distribucion[0].id, v1.state.distribucion[0].ventasOrigen.length, v1.info!.accion, v1.info!.motivo, v1.info!.nombre], [1, "d1", 1, "actualizado", "telefono", "Cliente Existente"]);
+  // 8 · cuenta existente (útil) → vincula
+  const porCuenta = { agregados: [{ id: "a1", nombre: "Otro", telefono: "2145550001", cuenta: "rp 4521", estado: "verde" }], distribucion: base.distribucion };
+  const v2c = confirmarVenta(porCuenta, "agregados", "agregado", "a1", { monto: "", producto: "" });
+  assert.deepEqual([v2c.state.distribucion.length, v2c.info!.motivo], [1, "cuenta"]);
+  // BUG REAL: una cuenta o un teléfono de RELLENO no identifican a nadie → NO vinculan (antes la venta "desaparecía" en otro cliente)
+  for (const [cuenta, telefono] of [["N/A", "2145553333"], ["0", "2145553334"], ["-", "2145553335"], ["0000", "2145553336"], ["", "000-0000"], ["", "111-1111"]]) {
+    const dist = [{ id: "dX", nombre: "Otro Cliente", telefono: telefono === "000-0000" || telefono === "111-1111" ? telefono : "2549990000", cuenta }];
+    const r = confirmarVenta({ agregados: [{ id: "a9", nombre: "Mi Cliente", telefono, cuenta, estado: "verde" }], distribucion: dist }, "agregados", "agregado", "a9", { monto: "", producto: "" });
+    assert.deepEqual([r.info!.accion, r.state.distribucion.length], ["creado", 2], `cuenta=${cuenta} tel=${telefono}`);
+  }
+  assert.deepEqual([telefonoUtil("0000000"), telefonoUtil("214-555-9999"), cuentaUtil("N/A"), cuentaUtil("0000"), cuentaUtil("RP-4521")], ["", "2145559999", "", "", "rp4521"]);
+  assert.equal(buscarEnDistribucionConMotivo([{ id: "d", cuenta: "N/A" }], { cuenta: "n/a", telefono: "" }), null);
+});
+
+test("B13 · Referidos (anfitrión y referido individual) por la misma transición atómica: trazabilidad intacta", () => {
+  const ini = { referidos: [{ id: "anf1", anfitrion: "Rita", anfitrion_telefono: "2145550100", referidos: [{ nombre: "Marta", telefono: "2145550101" }, { nombre: "Juan", telefono: "2145550102", estado: "verde" }] }], distribucion: [] as any[] };
+  // referido individual i=1 (mismo conRef que App)
+  const refCard = { ...ini.referidos[0].referidos[1], id: "anf1::1" };
+  const { registro, venta } = ventaDesdeRegistro(refCard, "referido", { monto: "", producto: "" }, SUPER, NOW);
+  const conRef = (patch: any) => (anf: any) => { const refs = [...anf.referidos]; refs[1] = { ...refs[1], ...patch }; return { ...anf, referidos: refs }; };
+  const r1 = aplicarVentaEnEstado(ini, "referidos", "anf1", conRef(camposVenta(registro)), venta, NOW, SUPER);
+  assert.deepEqual([r1.state.referidos[0].referidos[1].resultado, r1.state.referidos[0].referidos[1].resultByUid, r1.state.referidos[0].anfitrion], ["demo_venta", "sa1", "Rita"]);
+  assert.deepEqual([r1.state.distribucion.length, r1.state.distribucion[0].sourceSection, r1.state.distribucion[0].sourceRecordId, r1.state.distribucion[0].sourceRefIndex], [1, "referidos", "anf1", 1]);
+  // anfitrión (sin índice)
+  const anfCard = { ...ini.referidos[0], nombre: "Rita", telefono: "2145550100" };
+  const va = ventaDesdeRegistro({ ...anfCard, id: "anf1" }, "referido", { monto: "", producto: "" }, SUPER, NOW);
+  const r2 = aplicarVentaEnEstado(r1.state, "referidos", "anf1", (anf: any) => ({ ...anf, ...camposVenta(va.registro) }), va.venta, NOW, SUPER);
+  assert.deepEqual([r2.state.distribucion.length, r2.state.distribucion[0].sourceRecordId, "sourceRefIndex" in r2.state.distribucion[0], r2.state.referidos[0].resultado], [2, "anf1", false, "demo_venta"]);
+  const { ops, blocked } = diffState(ini, r2.state, docsDe(ini), ctxSuper);
+  assert.deepEqual([ops.filter((o: any) => o.kind === "set").length, ops.filter((o: any) => o.kind === "delete").length, blocked.length], [3, 0, 0]);
+});
+
+test("B · App: la venta y la corrección desde la tarjeta usan UNA transición (ventaAtomicaV2 → aplicarVentaEnEstado); solo staff; aviso en pantalla", () => {
+  assert.ok(APP.includes("setState(s=>{ const r=aplicarVentaEnEstado(s, seccion, recordId, aplicar, staff?evento:null, new Date(), v2User?{ uid:v2User.uid, nombre:v2User.nombre }:null); info=r.info; return r.state; });"));
+  assert.ok(APP.includes("const staff = ACCESS_V2 && v2User && canRecordVisitResult(v2User.role);"));
+  const h = APP.slice(APP.indexOf("const handleApptResult=(c,id,detail=\"\",monto=\"\",producto=\"\",cartucho_meses=0)=>{\n    const RLABEL"), APP.indexOf("const exportCSV="));
+  assert.equal(/v2\.onVenta\(/.test(h), false);                                            // ya no hay dos escrituras separadas
+  assert.equal((h.match(/v2\.ventaAtomica\(/g) || []).length, 2);
+  assert.ok(APP.includes("💰 Venta registrada · ${nombre||\"Cliente\"} quedó en Distribución."));
+  assert.ok(APP.includes("vinculada a «${info.nombre||\"cliente existente\"}» en Distribución (${TEXTO_MOTIVO_VINCULO[info.motivo]||\"ya existía\"})"));
+});
+
+test("B · Estado visual en Distribución: 'Cliente / Venta' verde solo en UI (no escribe estado ni resultado); legacy igual", () => {
+  const cr = APP.slice(APP.indexOf("function ClientRow("), APP.indexOf("function DBSection("));
+  assert.ok(cr.includes(`const s=(!!acciones && type==="distribucion" && !c.estado && ventaVisibleDistribucion(c)) ? {...STATUS_COLORS.verde, label:"Cliente / Venta"} : (STATUS_COLORS[c.estado]||STATUS_COLORS.sin_estado);`));
+  assert.ok(cr.includes("💰 Venta registrada"));
+  // la regla visual no se aplica con estado manual ni sin venta, y legacy (acciones=null) usa siempre STATUS_COLORS
+  const usaVenta = (acciones: any, t: string, c: any) => !!acciones && t === "distribucion" && !c.estado && ventaVisibleDistribucion(c);
+  assert.equal(usaVenta({}, "distribucion", { venta: true }), true);
+  assert.equal(usaVenta({}, "distribucion", { venta: true, estado: "amarillo" }), false);      // estado manual manda
+  assert.equal(usaVenta({}, "distribucion", {}), false);
+  assert.equal(usaVenta(null, "distribucion", { venta: true }), false);                        // legacy
+});
+
+// ════════ Revisión del ZIP: cuenta corta real · corrección realmente atómica · todas las variantes de teléfono ════════
+test("C1 · cuentaUtil acepta cuentas cortas reales (RP-3) y rechaza rellenos; RP-3 vincula con rp3 sin duplicar", () => {
+  assert.equal(cuentaUtil("RP-3"), "rp3");
+  assert.equal(cuentaUtil("A1"), "a1");
+  for (const r of ["N/A", "NA", "NONE", "SIN CUENTA", "NO APLICA", "0", "00", "000", "0000", "-", "---", "", "  "]) assert.equal(cuentaUtil(r), "", JSON.stringify(r));
+  const ini = { agregados: [{ id: "a1", nombre: "Cliente RP3", telefono: "2145551212", cuenta: "RP-3", estado: "verde" }], distribucion: [{ id: "d3", nombre: "Existente rp3", telefono: "2549990001", cuenta: "rp3" }] };
+  const { state, info } = confirmarVenta(ini, "agregados", "agregado", "a1", { monto: "", producto: "" });
+  assert.deepEqual([info!.accion, info!.motivo, info!.id, state.distribucion.length, state.distribucion[0].ventasOrigen.length], ["actualizado", "cuenta", "d3", 1, 1]);
+  // y los rellenos siguen sin vincular
+  for (const relleno of ["N/A", "0", "0000", "-"]) {
+    const r = confirmarVenta({ agregados: [{ id: "a2", nombre: "X", telefono: "2145551313", cuenta: relleno, estado: "verde" }], distribucion: [{ id: "dX", nombre: "Otro", telefono: "2549990002", cuenta: relleno }] }, "agregados", "agregado", "a2", { monto: "", producto: "" });
+    assert.deepEqual([r.info!.accion, r.state.distribucion.length], ["creado", 2], relleno);
+  }
+});
+
+test("C3 · Teléfono: se revisan TODAS las variantes útiles del registro existente (Móvil, Casa, Trabajo…); rellenos no", () => {
+  for (const campo of ["telefonoMovil", "telefonoCasa", "telefonoTrabajo", "anfitrion_telefono", "tel"]) {
+    const dist = [{ id: "dV", nombre: "Ficha importada", telefono: "", [campo]: "214-555-9999" }];
+    const r = confirmarVenta({ agregados: [{ id: "a1", nombre: "Venta", telefono: "2145559999", estado: "verde" }], distribucion: dist }, "agregados", "agregado", "a1", { monto: "", producto: "" });
+    assert.deepEqual([r.info!.accion, r.info!.motivo, r.info!.id, r.state.distribucion.length], ["actualizado", "telefono", "dV", 1], campo);
+  }
+  // la venta también aporta sus variantes (registro de origen sin teléfono principal)
+  const r2 = confirmarVenta({ agregados: [{ id: "a1", nombre: "Solo móvil", telefono: "", telefonoMovil: "(214) 555-4444", estado: "verde" }], distribucion: [{ id: "dW", telefonoCasa: "2145554444" }] }, "agregados", "agregado", "a1", { monto: "", producto: "" });
+  assert.deepEqual([r2.info!.accion, r2.info!.id], ["actualizado", "dW"]);
+  // rellenos: no identifican
+  for (const t of ["0000000", "1111111"]) {
+    const r = confirmarVenta({ agregados: [{ id: "a3", nombre: "Relleno", telefono: t, estado: "verde" }], distribucion: [{ id: "dZ", telefono: "", telefonoMovil: t }] }, "agregados", "agregado", "a3", { monto: "", producto: "" });
+    assert.deepEqual([r.info!.accion, r.state.distribucion.length], ["creado", 2], t);
+  }
+  assert.deepEqual(telefonosUtiles({ telefono: "", telefonoMovil: "214-555-9999", telefonoCasa: "0000000", tel: "214.555.9999" }), ["2145559999"]);
+});
+
+test("C2 · Corrección desde una venta en v2: UN estado final (resultado, venta:false, sin ventaRegistroId, Distribución reconciliada)", () => {
+  // venta y luego corrección a demo_no_venta, ambas por la transición atómica que usa App
+  const ini = { agregados: [{ id: "a1", nombre: "Prueba", telefono: "2145559999", estado: "verde" }], distribucion: [] as any[] };
+  const v = confirmarVenta(ini, "agregados", "agregado", "a1", { monto: 900, producto: "Ducha" });
+  const fuente = v.state.agregados[0];
+  const { patch, reconciliar } = correccionDesdeRegistro(fuente, "demo_no_venta", { uid: "sup1", nombre: "Eva" }, NOW);
+  // MISMA `aplicar` que DBSection.handleApptResult (v2): corrección + campos del resultado
+  const aplicar = (x: any) => ({ ...x, ...patch, ...camposResultadoFisico("demo_no_venta", "no le alcanzó", x) });
+  const c = aplicarVentaEnEstado(v.state, "agregados", "a1", aplicar, reconciliar, NOW, { uid: "sup1", nombre: "Eva" });
+  const f = JSON.parse(JSON.stringify(c.state.agregados[0]));                                  // como lo guarda el store (sin undefined)
+  assert.deepEqual([f.resultado, f.venta, "ventaRegistroId" in f, f.resultByUid, f.resultByName, f.resultado_detalle], ["demo_no_venta", false, false, "sup1", "Eva", "no le alcanzó"]);
+  assert.deepEqual([c.info!.accion, c.state.distribucion[0].eliminado, c.state.distribucion[0].eliminadoMotivo, c.state.distribucion[0].ventasOrigen.length], ["papelera", true, "Venta corregida", 0]);
+  // un solo paso: diffState entre el estado de la venta y el final = registro fuente + Distribución, sin delete
+  const d = emptyDocs(); for (const r of v.state.agregados) d.records[r.id] = { ...r, section: "agregados", appId: "impactos" }; for (const r of v.state.distribucion) d.records[r.id] = { ...r, section: "distribucion", appId: "impactos" };
+  const { ops, blocked } = diffState(v.state, c.state, d, { uid: "sup1", role: "supervisor", appId: "impactos", nombre: "Eva" } as any);
+  assert.deepEqual([ops.map((o: any) => o.kind).sort().join(), blocked.length], ["set,set", 0]);
+  // camposResultadoFisico = parche legacy, resultado por resultado
+  assert.deepEqual(camposResultadoFisico("no_recibio", "", { resultado_detalle: "previo" }), { venta: false, resultado: "no_recibio", resultado_detalle: "previo" });
+  assert.deepEqual(camposResultadoFisico("seguimiento", "luego", {}), { resultado: "seguimiento", resultado_detalle: "luego" });
+  assert.deepEqual(camposResultadoFisico("recompra", "", {}), { venta: false, resultado: "recompra", resultado_detalle: "No pagó su deuda anterior — no sacar cita", recompra: true });
+});
+
+test("C2 · App: en v2 la corrección NO ejecuta un setData adicional (tarjeta, anfitrión y referido); legacy conserva su cadena", () => {
+  const h = APP.slice(APP.indexOf("const handleApptResult=(c,id,detail=\"\",monto=\"\",producto=\"\",cartucho_meses=0)=>{\n    const RLABEL"), APP.indexOf("const exportCSV="));
+  const ramaV2 = h.slice(h.indexOf("if(v2 && id!==\"demo_venta\"){"), h.indexOf("else if(v2 && id===\"demo_venta\"){"));
+  assert.ok(ramaV2.includes("v2.ventaAtomica(seccionDeTipo(type), c.id, x=>({...x, ...patch, ...camposResultadoFisico(id, detail, x)}), reconciliar);"));
+  assert.equal(/setData\(/.test(ramaV2), false);                                                        // sin segundo setData
+  assert.ok(ramaV2.includes('if(id==="seguimiento") openSchedule(c,"llamada");') && ramaV2.includes('else if(id==="reset") openSchedule(c,"reset");'));
+  // la cadena legacy queda detrás de las ramas v2 (else if), así que en v2 no se ejecuta
+  assert.ok(/\}\n    else if\(v2 && id==="demo_venta"\)\{[\s\S]*?\}\n    else if\(id==="demo_venta"\)      setData/.test(h));
+  // referidos: corrección v2 con return (sin patchAnf/patchRef después)
+  const b = bloqueReferidos();
+  assert.ok(b.includes('v2.ventaAtomica("referidos", c.id, anf=>({...anf, ...patch, ...camposResultadoFisico(rid, detail, anf)}), reconciliar);'));
+  assert.ok(b.includes('v2.ventaAtomica("referidos", c.id, conRef({...patch, ...camposResultadoFisico(rid, detail, refCard)}), reconciliar);'));
+});
+
+// ════════ Referidos v2: resultados físicos IGUALES a la tarjeta normal (camposResultadoFisico) ════════
+const ramasRefV2 = () => {
+  const b = bloqueReferidos();
+  const ini = (marca: string) => b.indexOf(marca);
+  const anf = b.slice(ini('// v2: corrección + campos del resultado (MISMOS que la tarjeta normal) en UNA transición; sin patchAnf después'), ini('if(v2 && rid==="demo_venta"){\n                      // v2: mismo flujo que el resto'));
+  const ref = b.slice(ini('// v2: corrección + campos del resultado (MISMOS que la tarjeta normal) en UNA transición; sin patchRef después'), ini('if(v2 && rid==="demo_venta"){\n                        // v2: origen = anfitrión'));
+  return { anf, ref };
+};
+// mismas funciones `aplicar` que la vista de Referidos
+const aplicarAnf = (rid: string, detail: string, patch: any) => (anf: any) => ({ ...anf, ...patch, ...camposResultadoFisico(rid, detail, anf) });
+const conRefT = (i: number, patch: any) => (anf: any) => { const refs = [...lst(anf.referidos)]; refs[i] = { ...refs[i], ...patch }; return { ...anf, referidos: refs }; };
+const EVA = { uid: "sup1", nombre: "Eva" };
+
+test("RF1-RF3 · Anfitrión y referido: seguimiento, reset y recompra guardan lo mismo que la tarjeta normal; seguimiento/reset abren la agenda", () => {
+  const base = { referidos: [{ id: "anf1", anfitrion: "Rita", anfitrion_telefono: "2145550100", resultado_detalle: "previo", referidos: [{ nombre: "Marta", telefono: "2145550101", resultado_detalle: "previo-ref" }] }], distribucion: [] as any[] };
+  const esperado: Record<string, any> = {
+    demo_no_venta: { venta: false, resultado: "demo_no_venta" }, no_recibio: { venta: false, resultado: "no_recibio" }, no_visito: { venta: false, resultado: "no_visito" },
+    seguimiento: { resultado: "seguimiento" }, reset: { resultado: "reset" },
+    recompra: { venta: false, resultado: "recompra", recompra: true, resultado_detalle: "No pagó su deuda anterior — no sacar cita" },
+  };
+  for (const rid of Object.keys(esperado)) {
+    // anfitrión
+    const ca = correccionDesdeRegistro(base.referidos[0], rid, EVA, NOW);
+    const a = aplicarVentaEnEstado(base, "referidos", "anf1", aplicarAnf(rid, "", ca.patch), ca.reconciliar, NOW, EVA).state.referidos[0];
+    for (const [k, v] of Object.entries(esperado[rid])) assert.deepEqual(a[k], v, `anfitrión ${rid}.${k}`);
+    assert.deepEqual([a.resultByUid, a.anfitrion, a.referidos.length], ["sup1", "Rita", 1], `anfitrión ${rid}`);
+    // referido individual
+    const refCard = { ...base.referidos[0].referidos[0], id: "anf1::0" };
+    const cr = correccionDesdeRegistro(refCard, rid, EVA, NOW);
+    const r = aplicarVentaEnEstado(base, "referidos", "anf1", conRefT(0, { ...cr.patch, ...camposResultadoFisico(rid, "", refCard) }), cr.reconciliar, NOW, EVA).state.referidos[0];
+    for (const [k, v] of Object.entries(esperado[rid])) assert.deepEqual(r.referidos[0][k], v, `referido ${rid}.${k}`);
+    assert.deepEqual([r.referidos[0].resultByUid, r.resultado, r.anfitrion], ["sup1", undefined, "Rita"], `referido ${rid}`);   // el anfitrión no se toca
+    // igual que la tarjeta normal (mismo helper, mismos campos)
+    assert.deepEqual(camposResultadoFisico(rid, "", { resultado_detalle: "previo" }), { ...esperado[rid], ...(rid === "recompra" ? {} : { resultado_detalle: "previo" }) }, `tarjeta normal ${rid}`);
+  }
+  // agenda: seguimiento → llamada, reset → reset, con la tarjeta correcta (anfitrión / referido)
+  const { anf, ref } = ramasRefV2();
+  assert.ok(anf.includes('if(rid==="seguimiento") openSchedule(anfCard,"llamada");\n                      else if(rid==="reset") openSchedule(anfCard,"reset");'));
+  assert.ok(ref.includes('if(rid==="seguimiento") openSchedule(refCard,"llamada");\n                        else if(rid==="reset") openSchedule(refCard,"reset");'));
+});
+
+test("RF4 · Si había venta vigente, reset y recompra (anfitrión y referido) quitan ventaRegistroId y reconcilian Distribución en la MISMA transición", () => {
+  for (const rid of ["reset", "recompra", "seguimiento", "demo_no_venta"]) {
+    // anfitrión con venta vigente
+    const host = { id: "anf1", anfitrion: "Rita", anfitrion_telefono: "2145550100", referidos: [{ nombre: "Marta", telefono: "2145550101" }] };
+    const anfCard = { ...host, nombre: "Rita", telefono: "2145550100" };
+    const v = ventaDesdeRegistro({ ...anfCard, id: "anf1" }, "referido", { monto: "", producto: "" }, SUPER, NOW);
+    const s1 = aplicarVentaEnEstado({ referidos: [host], distribucion: [] }, "referidos", "anf1", (x: any) => ({ ...x, ...camposVenta(v.registro) }), v.venta, NOW, SUPER).state;
+    const c1 = correccionDesdeRegistro(s1.referidos[0], rid, EVA, NOW);
+    const r1 = aplicarVentaEnEstado(s1, "referidos", "anf1", aplicarAnf(rid, "", c1.patch), c1.reconciliar, NOW, EVA);
+    const h = JSON.parse(JSON.stringify(r1.state.referidos[0]));
+    assert.deepEqual([h.resultado, h.venta, "ventaRegistroId" in h, r1.info!.accion, r1.state.distribucion[0].eliminado], [rid, false, false, "papelera", true], `anfitrión ${rid}`);
+    // referido con venta vigente
+    const refCard = { ...host.referidos[0], id: "anf1::0" };
+    const vr = ventaDesdeRegistro(refCard, "referido", { monto: "", producto: "" }, SUPER, NOW);
+    const s2 = aplicarVentaEnEstado({ referidos: [host], distribucion: [] }, "referidos", "anf1", conRefT(0, camposVenta(vr.registro)), vr.venta, NOW, SUPER).state;
+    const refAhora = { ...s2.referidos[0].referidos[0], id: "anf1::0" };
+    const c2 = correccionDesdeRegistro(refAhora, rid, EVA, NOW);
+    const r2 = aplicarVentaEnEstado(s2, "referidos", "anf1", conRefT(0, { ...c2.patch, ...camposResultadoFisico(rid, "", refAhora) }), c2.reconciliar, NOW, EVA);
+    const rr = JSON.parse(JSON.stringify(r2.state.referidos[0].referidos[0]));
+    assert.deepEqual([rr.resultado, rr.venta, "ventaRegistroId" in rr, r2.info!.accion, r2.state.distribucion[0].eliminado, r2.state.distribucion[0].sourceRefIndex], [rid, false, false, "papelera", true, 0], `referido ${rid}`);
+    // UN estado final → diffState: 2 SET (documento del anfitrión + Distribución), sin delete
+    const d = emptyDocs(); d.records.anf1 = { ...s2.referidos[0], section: "referidos", appId: "impactos" }; d.records[s2.distribucion[0].id] = { ...s2.distribucion[0], section: "distribucion", appId: "impactos" };
+    const { ops, blocked } = diffState(s2, r2.state, d, { uid: "sup1", role: "supervisor", appId: "impactos", nombre: "Eva" } as any);
+    assert.deepEqual([ops.map((o: any) => o.kind).join(), blocked.length], ["set,set", 0], `diff ${rid}`);
+  }
+});
+
+test("RF5-RF7 · Sin patchAnf/patchRef después de ventaAtomica; sin lógica manual; tarjeta normal y legacy intactos", () => {
+  const { anf, ref } = ramasRefV2();
+  for (const [nombre, rama, parche] of [["anfitrión", anf, "patchAnf("], ["referido", ref, "patchRef("]] as const) {
+    assert.ok(rama.includes("return;"), nombre);
+    assert.equal(rama.includes(parche), false, `${nombre}: sin ${parche} en la rama v2`);
+    assert.equal(rama.includes("setData("), false, `${nombre}: sin setData en la rama v2`);
+    assert.equal(/const res = rid===/.test(rama), false, `${nombre}: sin lógica manual de resultados`);
+    assert.ok(rama.includes("camposResultadoFisico(rid, detail,"), nombre);
+  }
+  // tarjeta normal: sin cambios respecto a la entrega anterior
+  assert.ok(APP.includes("v2.ventaAtomica(seccionDeTipo(type), c.id, x=>({...x, ...patch, ...camposResultadoFisico(id, detail, x)}), reconciliar);\n      if(id===\"seguimiento\") openSchedule(c,\"llamada\");\n      else if(id===\"reset\") openSchedule(c,\"reset\");"));
+  // legacy de Referidos: el parche manual de siempre sigue ahí (fuera de v2)
+  const b = bloqueReferidos();
+  assert.ok(b.includes(`const patch = rid==="demo_venta"?{venta:true,resultado:"demo_venta",resultado_detalle:detail}`));
+  assert.ok(b.includes("patchAnf(patch);") && b.includes("patchRef(patch);"));
 });
