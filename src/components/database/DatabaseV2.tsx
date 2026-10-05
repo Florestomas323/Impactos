@@ -22,6 +22,21 @@ export function DatabaseV2({ Base, baseProps, v2User, can, onVenta }: Props) {
   return <Base {...baseProps} v2={v2} />;
 }
 
+// Dato que se muestra junto al motivo del duplicado: el que COINCIDIÓ (no siempre el teléfono).
+//   cuenta → cuenta · telefono → teléfono · origen → id del registro de origen · nombre_direccion → dirección
+const lleno = (v: any) => v !== undefined && v !== null && String(v).trim() !== "";
+export function valorDuplicado(d: Duplicado): string {
+  const e: any = d?.existente || {};
+  const primero = (...vs: any[]) => { const v = vs.find(lleno); return v === undefined ? "" : String(v).trim(); };
+  switch (d?.motivo) {
+    case "cuenta": return primero(e.cuenta, e.numeroCuenta, e.anfitrion_cuenta);
+    case "telefono": return primero(e.telefono, e.anfitrion_telefono, e.telefonoMovil, e.telefonoCasa, e.telefonoTrabajo, e.tel);
+    case "origen": return lleno(e.sourceRecordId) ? `origen ${e.sourceRecordId}${lleno(e.sourceRefIndex) ? ` · referido ${e.sourceRefIndex}` : ""}` : "";
+    case "nombre_direccion": return primero(e.direccion, e.anfitrion_direccion);
+    default: return "";
+  }
+}
+
 // Aviso de posible duplicado al dar de alta (nunca bloquea, nunca fusiona).
 export function AvisoDuplicadoDB({ duplicados, onVolver, onGuardar }: { duplicados: Duplicado[]; onVolver: () => void; onGuardar: () => void }) {
   return (
@@ -31,7 +46,7 @@ export function AvisoDuplicadoDB({ duplicados, onVolver, onGuardar }: { duplicad
         {duplicados.map((d, i) => (
           <li key={i} className="flex gap-2">
             <span>{d.fuerte ? "⚠️" : "ℹ️"}</span>
-            <span>{textoDuplicado(d)}{d.existente?.telefono ? <span className="text-amber-700"> · {d.existente.telefono}</span> : null}</span>
+            <span>{textoDuplicado(d)}{valorDuplicado(d) ? <span className="text-amber-700"> · {valorDuplicado(d)}</span> : null}</span>
           </li>
         ))}
       </ul>
