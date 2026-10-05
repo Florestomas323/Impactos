@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   paginar, PAGINA_DB, filtrarRegistros, coincideBusquedaV2, candidatoDuplicado, candidatosDuplicadoAnfitrion, textoDuplicado,
-  accionesRegistroV2, ventaDesdeRegistro, normTelefono, normCuenta, normTexto, telefonosDe, camposVenta, clavesReferidos, correccionDesdeRegistro,
+  accionesRegistroV2, ventaDesdeRegistro, normTelefono, normCuenta, normTexto, telefonosDe, camposVenta, clavesReferidos, correccionDesdeRegistro, ventaVisibleDistribucion, ultimaVentaOrigen,
 } from "../src/services/databaseV2";
 import { distribucionDesdeVenta, reconciliarDistribucionPorVenta, registroTrabajado, esVentaParaDistribucion } from "../src/services/ventaDistribucionV2";
 import { registrarVentaServicio, registrarResultadoServicio, contarVentasDemosV2 } from "../src/services/serviceV2";
@@ -453,4 +453,42 @@ test("V1-V4 · AvisoDuplicadoDB: cuenta → cuenta; teléfono → teléfono; nun
   const ui = fs.readFileSync(new URL("../src/components/database/DatabaseV2.tsx", import.meta.url), "utf8");
   assert.ok(ui.includes("{valorDuplicado(d) ? <span className=\"text-amber-700\"> · {valorDuplicado(d)}</span> : null}"));
   assert.equal(ui.includes("d.existente?.telefono ?"), false);
+});
+
+// ════════ r1 (detalle visual): Distribución que llegó por una venta se ve como venta (sin escribir resultado) ════════
+test("D1-D6 · Distribución por venta: indicador visual v2 sin `resultado`; métricas una sola vez; legacy igual", () => {
+  const c = { id: "a1", nombre: "Beto", telefono: "2105550303" };
+  const { registro, venta } = ventaDesdeRegistro(c, "agregado", { monto: 2500, producto: "Sartenes" }, { uid: "dist1", nombre: "Tomas" }, NOW);
+  const dist = distribucionDesdeVenta([], venta, NOW).lista[0];
+  // 1 · auto-creada por venta: venta:true y trazabilidad
+  assert.deepEqual([dist.venta, dist.createdFrom, dist.ventaOrigenApptId, dist.ventasOrigen.length, dist.producto], [true, "venta_distribucion", venta.id, 1, "Sartenes"]);
+  // 4 · NO se copia el resultado físico al registro de Distribución
+  assert.equal("resultado" in dist, false);
+  // 2 · sin `resultado`, la UI v2 la reconoce como venta
+  assert.equal(ventaVisibleDistribucion(dist), true);
+  assert.deepEqual(ultimaVentaOrigen(dist), { fecha: "2026-10-02T10:00", producto: "Sartenes", monto: 2500, por: "Tomas", tipo: "cita" });   // hora local (Texas), no UTC
+  assert.equal(ultimaVentaOrigen({ ventasOrigen: [{ fecha: "2026-10-05T04:27:00.000Z" }] })!.fecha, "2026-10-04T23:27");                         // 11:27 PM del 4 en Texas
+  // 3 · ventasOrigen con ventas activa el indicador (aunque no tenga venta:true ni createdFrom)
+  assert.equal(ventaVisibleDistribucion({ id: "d9", ventasOrigen: [{ apptId: "x", monto: 10, porNombre: "Eva" }] }), true);
+  assert.equal(ventaVisibleDistribucion({ id: "d9", venta: true }), true);
+  assert.equal(ventaVisibleDistribucion({ id: "d9" }), false);                                      // cliente normal: nada
+  assert.equal(ventaVisibleDistribucion({ id: "d9", venta: true, resultado: "demo_no_venta" }), false);   // con resultado propio manda el resultado
+  // venta corregida (auto-creado con todas sus ventas quitadas): ya no es venta vigente
+  const corregido = reconciliarDistribucionPorVenta([{ ...dist, notas: [{ texto: "x" }] }], { id: venta.id, tipo: "cita", resultado: "demo_no_venta" }, NOW).lista[0];
+  assert.deepEqual([corregido.ventasOrigen.length, ventaVisibleDistribucion(corregido)], [0, false]);
+  // 5 · métricas: UNA sola venta (historial del cliente de origen); el registro de Distribución no suma
+  const m = contarVentasDemosV2({ appts: [], clientes: [{ ...registro, historial: [{ cita_resultado: "demo_venta", fecha: "2026-10-02", monto: 2500 }] }, dist], enP: () => true });
+  assert.deepEqual([m.ventas, m.volumen, m.demos], [1, 2500, 1]);
+  // la UI solo lee: ningún setData en el bloque visual, y no escribe `resultado`
+  const cr = APP.slice(APP.indexOf("function ClientRow("), APP.indexOf("function DBSection("));
+  const bloque = cr.slice(cr.indexOf("{/* v2 · Distribución que llegó por una venta"), cr.indexOf("{c.resultado_detalle &&"));
+  assert.ok(bloque.includes("💰 Venta registrada") && bloque.includes("Venta de origen") && bloque.includes("Registrado por"));
+  assert.equal(/setData|onStatusChange|resultado:/.test(bloque), false);
+  // 6 · legacy: mismas condiciones de siempre (acciones=null → el indicador v2 nunca se evalúa)
+  assert.ok(cr.includes(`{(c.resultado==="venta" || (!!acciones && type==="distribucion" && ventaVisibleDistribucion(c))) && <span className="text-sm shrink-0" title="Venta"><Ico e="💰" /></span>}`));
+  assert.ok(cr.includes(`{!!acciones && type==="distribucion" && ventaVisibleDistribucion(c) && (()=>{`));
+  const ver = (acciones: any, t: string, x: any) => x.resultado === "venta" || (!!acciones && t === "distribucion" && ventaVisibleDistribucion(x));
+  assert.equal(ver(null, "distribucion", dist), false);                                              // legacy: sin 💰 nuevo (igual que antes)
+  assert.equal(ver({}, "distribucion", dist), true);                                                 // v2: 💰
+  assert.equal(ver(null, "agregado", { resultado: "venta" }), true);                                 // legacy conserva su 💰
 });
