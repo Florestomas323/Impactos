@@ -132,7 +132,8 @@ export function ventaDesdeRegistro(registro: any, type: string, datos: { monto?:
   const venta = {
     id: ventaRegistroId,
     tipo: "cita", resultado: "demo_venta", fecha: resultAt, monto: montoNum, producto: datos?.producto || "",
-    nombre: registro?.nombre || "", telefono: registro?.telefono || "", direccion: registro?.direccion || "", ciudad: registro?.ciudad || "", cp: registro?.cp || "",
+    // teléfono: el principal o, si falta, la primera variante (registros importados guardan Móvil/Casa/Trabajo aparte)
+    nombre: registro?.nombre || "", telefono: registro?.telefono || registro?.telefonoMovil || registro?.telefonoCasa || registro?.telefonoTrabajo || "", direccion: registro?.direccion || "", ciudad: registro?.ciudad || "", cp: registro?.cp || "",
     ...(vacio(registro?.cuenta) ? {} : { cuenta: registro.cuenta }), ...traza,
     ...(registro?.createdByUid ? { createdByUid: registro.createdByUid } : {}), ...(registro?.createdByName ? { createdByName: registro.createdByName } : {}),
     resultByUid: autor.uid, resultByName: autor.nombre, resultAt,
@@ -197,4 +198,16 @@ export function ultimaVentaOrigen(c: any) {
   const v = ventas[ventas.length - 1];
   if (!v) return null;
   return { fecha: v.fecha ? fechaLocal(v.fecha) : "", producto: v.producto || "", monto: Number(v.monto) || 0, por: v.porNombre || "", tipo: v.tipo || "" };   // hora LOCAL
+}
+
+// ── Campos del resultado físico (MISMOS que la rama legacy de DBSection.handleApptResult) ──
+// v2 los incluye en la misma función `aplicar` de ventaAtomica → la corrección es UNA transición.
+export function camposResultadoFisico(id: string, detail: string, x: any) {
+  const det = detail || x?.resultado_detalle;
+  switch (id) {
+    case "demo_no_venta": case "no_recibio": case "no_visito": return { venta: false, resultado: id, resultado_detalle: det };
+    case "seguimiento": case "reset": return { resultado: id, resultado_detalle: det };
+    case "recompra": return { venta: false, resultado: "recompra", resultado_detalle: detail || "No pagó su deuda anterior — no sacar cita", recompra: true };
+    default: return {};
+  }
 }
