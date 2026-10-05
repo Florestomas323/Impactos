@@ -419,3 +419,38 @@ test("F12 · Anfitrión en papelera: sus tarjetas internas reciben inPapelera (s
   const interna = { ...accionesRegistroV2(actor("distribuidor"), { id: "anf1" }, "referido"), papelera: false, restaurar: false, borrarDefinitivo: false };
   assert.deepEqual([interna.restaurar, interna.borrarDefinitivo], [false, false]);
 });
+
+// ════════ r1 (bug visual): el dato junto al aviso depende del MOTIVO del duplicado ════════
+import { valorDuplicado } from "../src/components/database/DatabaseV2";
+test("V1-V4 · AvisoDuplicadoDB: cuenta → cuenta; teléfono → teléfono; nunca el teléfono para cuenta ni para nombre+dirección", () => {
+  const allData = {
+    agregados: [{ id: "a39", nombre: "Prueba A39", telefono: "254-555-1039", cuenta: "123456789", direccion: "9 Oak St" }],
+    prospectos: [], distribucion: [],
+    referidos: [{ id: "anf1", anfitrion: "Rita", anfitrion_telefono: "2105550000", anfitrion_cuenta: "RP-88", referidos: [] }],
+  };
+  // 1 · cuenta → muestra la cuenta
+  const dc = candidatoDuplicado({ nombre: "Otro", telefono: "1", cuenta: "123456789" }, allData)!;
+  assert.equal(dc.motivo, "cuenta");
+  assert.equal(valorDuplicado(dc), "123456789");
+  assert.equal(`${textoDuplicado(dc)} · ${valorDuplicado(dc)}`, 'Posible duplicado: "Prueba A39" en Agregados tiene el mismo número de cuenta. · 123456789');
+  const dca = candidatoDuplicado({ nombre: "X", telefono: "2", cuenta: "rp88" }, allData)!;          // cuenta de anfitrión
+  assert.deepEqual([dca.motivo, valorDuplicado(dca)], ["cuenta", "RP-88"]);
+  assert.equal(valorDuplicado({ motivo: "cuenta", existente: { numeroCuenta: "N-1", telefono: "999" }, seccion: "agregados", fuerte: true }), "N-1");
+  // 2 · teléfono → muestra el teléfono
+  const dt = candidatoDuplicado({ nombre: "Otro", telefono: "(254) 555 1039" }, allData)!;
+  assert.deepEqual([dt.motivo, valorDuplicado(dt)], ["telefono", "254-555-1039"]);
+  const dth = candidatoDuplicado({ nombre: "Otro", telefono: "210 555 0000" }, allData)!;           // teléfono de anfitrión
+  assert.deepEqual([dth.motivo, valorDuplicado(dth)], ["telefono", "2105550000"]);
+  // 3 · cuenta NO muestra el teléfono como valor
+  assert.ok(!valorDuplicado(dc).includes("254-555-1039") && !valorDuplicado(dc).includes("5551039"));
+  // 4 · nombre + dirección → la dirección, no el teléfono
+  const dn = candidatoDuplicado({ nombre: "prueba a39", telefono: "7", direccion: "9 oak st." }, allData)!;
+  assert.deepEqual([dn.motivo, valorDuplicado(dn)], ["nombre_direccion", "9 Oak St"]);
+  assert.ok(!valorDuplicado(dn).includes("555"));
+  // origen → id del registro de origen (con índice de referido si lo hay)
+  assert.equal(valorDuplicado({ motivo: "origen", existente: { sourceRecordId: "anf1", sourceRefIndex: 2, telefono: "999" }, seccion: "prospectos", fuerte: true }), "origen anf1 · referido 2");
+  // el componente usa el helper (no el teléfono fijo)
+  const ui = fs.readFileSync(new URL("../src/components/database/DatabaseV2.tsx", import.meta.url), "utf8");
+  assert.ok(ui.includes("{valorDuplicado(d) ? <span className=\"text-amber-700\"> · {valorDuplicado(d)}</span> : null}"));
+  assert.equal(ui.includes("d.existente?.telefono ?"), false);
+});
