@@ -12,13 +12,15 @@ type Props = {
   v2User: any;               // { uid, nombre, role }
   can: (permiso: string) => boolean;
   onVenta: (venta: any) => void;   // Venta → Distribución (mismo camino que Agenda y Servicio)
+  // Venta/corrección desde la TARJETA: registro de origen + Distribución en UNA transición de estado.
+  ventaAtomica: (seccion: string, recordId: any, aplicar: (r: any) => any, evento: any) => any;
 };
-export function DatabaseV2({ Base, baseProps, v2User, can, onVenta }: Props) {
+export function DatabaseV2({ Base, baseProps, v2User, can, onVenta, ventaAtomica }: Props) {
   const v2 = useMemo(() => ({
     autor: { uid: v2User.uid, nombre: v2User.nombre },
     actor: { uid: v2User.uid, role: v2User.role, can },
-    onVenta, pagina: PAGINA_DB,
-  }), [v2User?.uid, v2User?.nombre, v2User?.role, can, onVenta]);
+    onVenta, ventaAtomica, pagina: PAGINA_DB,
+  }), [v2User?.uid, v2User?.nombre, v2User?.role, can, onVenta, ventaAtomica]);
   return <Base {...baseProps} v2={v2} />;
 }
 
