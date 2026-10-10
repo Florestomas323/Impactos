@@ -63,7 +63,20 @@ const mismoOrigen = (a: any, b: any) =>
   !vacio(a?.sourceRecordId) && !vacio(b?.sourceRecordId) && String(a.sourceRecordId) === String(b.sourceRecordId)
   && String(a.sourceSection || "") === String(b.sourceSection || "") && String(a.sourceRefIndex ?? "") === String(b.sourceRefIndex ?? "");
 // Compara un nuevo registro (o referido) contra todo lo visible. Devuelve el PRIMER motivo por fuerza.
-export function candidatoDuplicado(nuevo: any, allData: any, opts: { excluirId?: any; excluirAnfitrionId?: any } = {}): Duplicado | null {
+// ── Mismo cliente por TRAZABILIDAD explícita (solo al EDITAR) ────────────────
+// Clave de un registro: "seccion|id|" o, para un referido anidado, "referidos|idAnfitrión|índice".
+// Un registro trazado (sourceSection + sourceRecordId [+ sourceRefIndex]) apunta a la clave de su origen.
+// Al editar, se ignoran como duplicado SOLO los candidatos cuya clave propia o de origen coincide con la
+// identidad del registro editado (él mismo y su origen exacto). Otros clientes con la misma cuenta o
+// teléfono siguen apareciendo. Al crear un registro nuevo no se usa (comportamiento de siempre).
+const refClave = (i: any) => (i === undefined || i === null || String(i).trim() === "" ? "" : String(Number(i)));
+export const claveRegistro = (seccion: any, id: any, refIndex?: any) => `${seccion}|${id}|${refClave(refIndex)}`;
+export const claveOrigen = (r: any) => (!vacio(r?.sourceSection) && !vacio(r?.sourceRecordId) ? claveRegistro(r.sourceSection, r.sourceRecordId, r.sourceRefIndex) : null);
+export function identidadTrazada(registro: any, seccion: string, refIndex?: any): string[] {
+  return [vacio(registro?.id) ? null : claveRegistro(seccion, registro.id, refIndex), claveOrigen(registro)].filter(Boolean) as string[];
+}
+export function candidatoDuplicado(nuevo: any, allData: any, opts: { excluirId?: any; excluirAnfitrionId?: any; mismoCliente?: string[] } = {}): Duplicado | null {
+  const mismo = new Set(opts.mismoCliente || []);
   const cuenta = normCuenta(nuevo?.cuenta || nuevo?.numeroCuenta || nuevo?.anfitrion_cuenta), tels = telefonosDe(nuevo);
   const nombre = normNombre(nuevo?.nombre || nuevo?.anfitrion), dir = normDireccion(nuevo?.direccion);
   const candidatos: Array<{ r: any; seccion: string; anfitrion?: any; refIdx?: number }> = [];
@@ -72,6 +85,14 @@ export function candidatoDuplicado(nuevo: any, allData: any, opts: { excluirId?:
     candidatos.push({ r, seccion: sec });
     if (sec === "referidos" && String(r.id) !== String(opts.excluirAnfitrionId))
       lst(r.referidos).forEach((ref: any, i: number) => ref && candidatos.push({ r: ref, seccion: sec, anfitrion: r, refIdx: i }));
+  }
+  if (mismo.size) {   // solo al editar: fuera el propio origen trazado (y lo trazado desde este registro)
+    for (let k = candidatos.length - 1; k >= 0; k--) {
+      const c = candidatos[k];
+      const propia = c.anfitrion ? claveRegistro("referidos", c.anfitrion.id, c.refIdx) : claveRegistro(c.seccion, c.r.id);
+      const origen = claveOrigen(c.r);
+      if (mismo.has(propia) || (origen && mismo.has(origen))) candidatos.splice(k, 1);
+    }
   }
   const res = (c: any, motivo: Duplicado["motivo"], fuerte: boolean): Duplicado =>
     ({ existente: c.r, seccion: c.seccion, motivo, fuerte, ...(c.anfitrion ? { referidoDe: c.anfitrion, refIdx: c.refIdx } : {}) });
@@ -82,12 +103,16 @@ export function candidatoDuplicado(nuevo: any, allData: any, opts: { excluirId?:
   return null;
 }
 // Alta de ANFITRIÓN de referidos: revisa al anfitrión y a cada referido anidado.
-export function candidatosDuplicadoAnfitrion(anf: any, allData: any, opts: { excluirId?: any } = {}): Duplicado[] {
+// `editando` (solo al editar): el anfitrión guardado → se ignora lo trazado a él o a cada referido exacto.
+export function candidatosDuplicadoAnfitrion(anf: any, allData: any, opts: { excluirId?: any; editando?: any } = {}): Duplicado[] {
   const out: Duplicado[] = [];
+  const ed = opts.editando && !vacio(opts.editando.id) ? opts.editando : null;
   // El formulario de Referidos guarda la cuenta del anfitrión en anfitrion_cuenta (legacy: cuenta).
-  const h = candidatoDuplicado({ nombre: anf?.anfitrion, telefono: anf?.anfitrion_telefono, cuenta: anf?.anfitrion_cuenta || anf?.cuenta, direccion: anf?.anfitrion_direccion }, allData, { excluirId: opts.excluirId, excluirAnfitrionId: opts.excluirId });
+  const h = candidatoDuplicado({ nombre: anf?.anfitrion, telefono: anf?.anfitrion_telefono, cuenta: anf?.anfitrion_cuenta || anf?.cuenta, direccion: anf?.anfitrion_direccion }, allData,
+    { excluirId: opts.excluirId, excluirAnfitrionId: opts.excluirId, ...(ed ? { mismoCliente: identidadTrazada(ed, "referidos") } : {}) });
   if (h) out.push(h);
-  lst(anf?.referidos).forEach((r: any) => { const d = r && candidatoDuplicado(r, allData, { excluirId: opts.excluirId, excluirAnfitrionId: opts.excluirId }); if (d) out.push(d); });
+  lst(anf?.referidos).forEach((r: any, i: number) => { const d = r && candidatoDuplicado(r, allData,
+    { excluirId: opts.excluirId, excluirAnfitrionId: opts.excluirId, ...(ed ? { mismoCliente: [claveRegistro("referidos", ed.id, i), claveOrigen(r)].filter(Boolean) as string[] } : {}) }); if (d) out.push(d); });
   return out;
 }
 const SECCION_LABEL: Record<string, string> = { agregados: "Agregados", prospectos: "Prospección", distribucion: "Distribución", referidos: "Referidos" };
