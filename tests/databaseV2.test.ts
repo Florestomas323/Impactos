@@ -108,7 +108,7 @@ test("11 · Referidos incluidos: anfitrión y referidos anidados, al dar de alta
   assert.equal(candidatoDuplicado({ nombre: "Marta L", telefono: "2105550303" }, allData)!.referidoDe.id, "anf1");
   // editar el propio anfitrión no se marca contra sí mismo ni contra sus referidos
   assert.equal(candidatosDuplicadoAnfitrion(allData.referidos[0], allData, { excluirId: "anf1" }).length, 0);
-  assert.ok(APP.includes('const dups = type==="referido" ? candidatosDuplicadoAnfitrion(d, allData, {excluirId})'));
+  assert.ok(APP.includes('const dups = type==="referido" ? candidatosDuplicadoAnfitrion(d, allData, {excluirId, editando:editItem||null})'));
 });
 
 test("12-15 · Acciones por rol: borrado definitivo solo super_admin y distribuidor; supervisor y telemarketing NO; editar según permisos", () => {
@@ -765,4 +765,87 @@ test("RF5-RF7 · Sin patchAnf/patchRef después de ventaAtomica; sin lógica man
   const b = bloqueReferidos();
   assert.ok(b.includes(`const patch = rid==="demo_venta"?{venta:true,resultado:"demo_venta",resultado_detalle:detail}`));
   assert.ok(b.includes("patchAnf(patch);") && b.includes("patchRef(patch);"));
+});
+
+// ════════ Bug: editar Distribución trazada no debe avisar duplicado contra su PROPIO origen ════════
+import { identidadTrazada, claveRegistro, claveOrigen } from "../src/services/databaseV2";
+const editarDist = (dist: any, allData: any) => candidatoDuplicado({ ...dist, ciudad: "Waco" }, allData, { excluirId: dist.id, mismoCliente: identidadTrazada(dist, "distribucion") });
+
+test("T1-T3 · Editar Distribución trazada a Agregado a1: ignora a1 (cuenta y teléfono); otro agregado a2 sí alerta", () => {
+  const dist = { id: "dv_x", nombre: "Ana", telefono: "2145559999", cuenta: "88888888", sourceSection: "agregados", sourceRecordId: "a1", createdFrom: "venta_distribucion" };
+  const a1 = { id: "a1", nombre: "Ana", telefono: "214-555-9999", cuenta: "88888888" };
+  // 1 · misma cuenta (y teléfono) que su origen → sin aviso
+  assert.equal(editarDist(dist, { agregados: [a1], prospectos: [], distribucion: [dist], referidos: [] }), null);
+  // 2 · otro agregado a2 con la misma cuenta → SÍ aparece a2
+  const a2 = { id: "a2", nombre: "Otra Ana", telefono: "2549990000", cuenta: "88888888" };
+  const d2 = editarDist(dist, { agregados: [a1, a2], prospectos: [], distribucion: [dist], referidos: [] })!;
+  assert.deepEqual([d2.motivo, d2.existente.id, d2.seccion], ["cuenta", "a2", "agregados"]);
+  // 3 · por teléfono: no alerta contra su origen; sí contra otro cliente con ese teléfono
+  const distTel = { ...dist, cuenta: "" };
+  assert.equal(editarDist(distTel, { agregados: [{ ...a1, cuenta: "" }], prospectos: [], distribucion: [distTel], referidos: [] }), null);
+  const p9 = { id: "p9", nombre: "Pedro", telefono: "(214) 555-9999" };
+  const d3 = editarDist(distTel, { agregados: [{ ...a1, cuenta: "" }], prospectos: [p9], distribucion: [distTel], referidos: [] })!;
+  assert.deepEqual([d3.motivo, d3.existente.id], ["telefono", "p9"]);
+  // solo la sección exacta: un registro de OTRA sección con el mismo id "a1" no se ignora
+  const d4 = editarDist(dist, { agregados: [], prospectos: [{ id: "a1", nombre: "Homónimo", telefono: "1", cuenta: "88888888" }], distribucion: [dist], referidos: [] })!;
+  assert.deepEqual([d4.seccion, d4.existente.id], ["prospectos", "a1"]);
+  // otra ficha de Distribución con la misma cuenta y SIN ese origen sí alerta
+  const d5 = editarDist(dist, { agregados: [a1], prospectos: [], distribucion: [dist, { id: "d77", nombre: "Otro", telefono: "3", cuenta: "88888888" }], referidos: [] })!;
+  assert.deepEqual([d5.seccion, d5.existente.id], ["distribucion", "d77"]);
+});
+
+test("T4-T5 · Referido individual: ignora solo sourceRecordId + sourceRefIndex exactos; otro referido (o el anfitrión) con el mismo teléfono sí alerta", () => {
+  const dist = { id: "dv_r", nombre: "Juan", telefono: "2145550102", sourceSection: "referidos", sourceRecordId: "anf1", sourceRefIndex: 1 };
+  const anf = (refs: any[], tel = "2145550100") => ({ id: "anf1", anfitrion: "Rita", anfitrion_telefono: tel, referidos: refs });
+  // 4 · su origen exacto (anf1 · referido 1) se ignora
+  assert.equal(editarDist(dist, { agregados: [], prospectos: [], distribucion: [dist], referidos: [anf([{ nombre: "Marta", telefono: "2145550101" }, { nombre: "Juan", telefono: "214-555-0102" }])] }), null);
+  // 5 · otro referido del mismo anfitrión con el mismo teléfono → SÍ alerta (referido 0)
+  const d = editarDist(dist, { agregados: [], prospectos: [], distribucion: [dist], referidos: [anf([{ nombre: "Juan bis", telefono: "2145550102" }, { nombre: "Juan", telefono: "2145550102" }])] })!;
+  assert.deepEqual([d.motivo, d.referidoDe.id, d.refIdx], ["telefono", "anf1", 0]);
+  // el anfitrión no es el origen del referido → si comparte teléfono, alerta
+  const dh = editarDist(dist, { agregados: [], prospectos: [], distribucion: [dist], referidos: [anf([{ nombre: "M" }, { nombre: "Juan", telefono: "2145550102" }], "2145550102")] })!;
+  assert.deepEqual([dh.seccion, dh.existente.id, "referidoDe" in dh], ["referidos", "anf1", false]);
+  // origen = anfitrión (sin índice): ignora al anfitrión, NO a sus referidos
+  const distAnf = { id: "dv_a", nombre: "Rita", telefono: "2145550100", sourceSection: "referidos", sourceRecordId: "anf1" };
+  assert.equal(editarDist(distAnf, { agregados: [], prospectos: [], distribucion: [distAnf], referidos: [anf([])] }), null);
+  const da = editarDist(distAnf, { agregados: [], prospectos: [], distribucion: [distAnf], referidos: [anf([{ nombre: "Hija", telefono: "2145550100" }])] })!;
+  assert.deepEqual([da.referidoDe.id, da.refIdx], ["anf1", 0]);
+  // índice como string o número da la misma clave
+  assert.equal(claveOrigen({ sourceSection: "referidos", sourceRecordId: "anf1", sourceRefIndex: "1" }), claveRegistro("referidos", "anf1", 1));
+});
+
+test("T · Simétrico: editar el registro de ORIGEN no alerta contra la ficha de Distribución trazada desde él (ni editar al anfitrión contra lo trazado de sus referidos)", () => {
+  const a1 = { id: "a1", nombre: "Ana", telefono: "2145559999", cuenta: "88888888" };
+  const dist = { id: "dv_x", nombre: "Ana", telefono: "2145559999", cuenta: "88888888", sourceSection: "agregados", sourceRecordId: "a1" };
+  const all = { agregados: [a1], prospectos: [], distribucion: [dist], referidos: [] };
+  assert.equal(candidatoDuplicado({ ...a1, ciudad: "Waco" }, all, { excluirId: "a1", mismoCliente: identidadTrazada(a1, "agregados") }), null);
+  // pero otra Distribución de otro cliente con esa cuenta sí
+  const all2 = { ...all, distribucion: [dist, { id: "d9", nombre: "X", telefono: "1", cuenta: "88888888" }] };
+  assert.equal(candidatoDuplicado({ ...a1 }, all2, { excluirId: "a1", mismoCliente: identidadTrazada(a1, "agregados") })!.existente.id, "d9");
+  // anfitrión editado: su referido 1 ya pasó a Distribución → no alerta por ese referido; un tercero sí
+  const host = { id: "anf1", anfitrion: "Rita", anfitrion_telefono: "2145550100", referidos: [{ nombre: "Marta", telefono: "2145550101" }, { nombre: "Juan", telefono: "2145550102" }] };
+  const distJ = { id: "dv_j", nombre: "Juan", telefono: "2145550102", sourceSection: "referidos", sourceRecordId: "anf1", sourceRefIndex: 1 };
+  const allR = { agregados: [], prospectos: [], distribucion: [distJ], referidos: [host] };
+  assert.equal(candidatosDuplicadoAnfitrion(host, allR, { excluirId: "anf1", editando: host }).length, 0);
+  // si el formulario agrega un referido nuevo con el teléfono de Juan (índice 2) → SÍ alerta contra la ficha dv_j
+  const conNuevo = { ...host, referidos: [...host.referidos, { nombre: "Juan otra vez", telefono: "2145550102" }] };
+  const ds = candidatosDuplicadoAnfitrion(conNuevo, allR, { excluirId: "anf1", editando: host });
+  assert.deepEqual(ds.map((d) => d.existente.id), ["dv_j"]);
+});
+
+test("T6 · Alta NUEVA manual: sin exclusiones extra (detecta el origen y la ficha trazada como siempre)", () => {
+  const a1 = { id: "a1", nombre: "Ana", telefono: "2145559999", cuenta: "88888888" };
+  const dist = { id: "dv_x", nombre: "Ana", telefono: "2145559999", cuenta: "88888888", sourceSection: "agregados", sourceRecordId: "a1" };
+  const all = { agregados: [a1], prospectos: [], distribucion: [dist], referidos: [] };
+  const n = candidatoDuplicado({ nombre: "Nueva", telefono: "1", cuenta: "88888888" }, all)!;     // sin mismoCliente
+  assert.deepEqual([n.motivo, n.existente.id], ["cuenta", "a1"]);
+  assert.equal(candidatoDuplicado({ nombre: "Nueva", telefono: "214 555 9999" }, all)!.motivo, "telefono");
+  assert.equal(candidatosDuplicadoAnfitrion({ anfitrion: "N", anfitrion_telefono: "2145559999", referidos: [] }, all).length, 1);
+  // identidadTrazada de un registro nuevo (sin id ni source) es vacía
+  assert.deepEqual(identidadTrazada({ nombre: "x" }, "agregados"), []);
+  // App: la exclusión solo se calcula al EDITAR
+  assert.ok(APP.includes("const mismoCliente = editItem ? identidadTrazada(editItem, seccionDeTipo(type)) : undefined;"));
+  assert.ok(APP.includes("candidatosDuplicadoAnfitrion(d, allData, {excluirId, editando:editItem||null})"));
+  assert.ok(APP.includes("candidatoDuplicadoDB(d, allData, {excluirId, mismoCliente})"));
+  assert.ok(APP.includes(`if(!v2 && type!=="referido" && allData && isDuplicate(d, allData)){`));   // legacy intacto
 });
