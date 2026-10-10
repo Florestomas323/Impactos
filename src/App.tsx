@@ -22,7 +22,7 @@ import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEv
 import { contarVentasDemosV2, serviceMetricDate, serviciosRealizados, ventaServicioCartucho, ventasServicioDe, apptsDelGrupo, ultimoCambioCartucho, tiempoHumano, alertasCartucho, servicioDesdeCartucho, duplicateServiceCandidate, candidatosServicio, estadoServicio, ESTADO_SERVICIO } from "./services/serviceV2";
 import { ServicioAccionesV2, ServiciosV2 } from "./components/servicio/ServicioV2";
 import { DatabaseV2, AvisoDuplicadoDB, VerMasDB } from "./components/database/DatabaseV2";
-import { coincideBusquedaV2, paginar as paginarDB, candidatoDuplicado as candidatoDuplicadoDB, candidatosDuplicadoAnfitrion, accionesRegistroV2, ventaDesdeRegistro, camposVenta, clavesReferidos, correccionDesdeRegistro, ventaVisibleDistribucion, ultimaVentaOrigen, seccionDeTipo, camposResultadoFisico } from "./services/databaseV2";
+import { coincideBusquedaV2, paginar as paginarDB, candidatoDuplicado as candidatoDuplicadoDB, candidatosDuplicadoAnfitrion, accionesRegistroV2, ventaDesdeRegistro, camposVenta, clavesReferidos, correccionDesdeRegistro, ventaVisibleDistribucion, ultimaVentaOrigen, seccionDeTipo, camposResultadoFisico, identidadTrazada } from "./services/databaseV2";
 import { reconciliarDistribucionPorVenta, aplicarVentaEnEstado, TEXTO_MOTIVO_VINCULO } from "./services/ventaDistribucionV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
@@ -3508,7 +3508,9 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
   const saveNew=(d, forzar=false)=>{
     if(v2 && !forzar && allData){
       const excluirId = editItem ? editItem.id : undefined;
-      const dups = type==="referido" ? candidatosDuplicadoAnfitrion(d, allData, {excluirId}) : (()=>{ const x=candidatoDuplicadoDB(d, allData, {excluirId}); return x?[x]:[]; })();
+      // al EDITAR también se ignora su propio origen trazado (sourceSection/sourceRecordId/sourceRefIndex); al crear, nada más
+      const mismoCliente = editItem ? identidadTrazada(editItem, seccionDeTipo(type)) : undefined;
+      const dups = type==="referido" ? candidatosDuplicadoAnfitrion(d, allData, {excluirId, editando:editItem||null}) : (()=>{ const x=candidatoDuplicadoDB(d, allData, {excluirId, mismoCliente}); return x?[x]:[]; })();
       if(dups.length){ setDupV2({d, dups}); return; }
     }
     setDupV2(null);
