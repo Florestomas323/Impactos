@@ -1822,14 +1822,15 @@ function ClientForm({ initial, onSave, onClose, type }) {
       </div>
       {type==="prospecto" && <Field label="Fuente del dato"><input className={inpLight} placeholder="ej. Facebook, Referido, Evento…" value={d.fuente||""} onChange={e=>set("fuente",e.target.value)} /></Field>}
       {type==="distribucion" && <Field label="Fecha última compra"><input type="date" className={inpLight} value={d.ultima_compra||""} onChange={e=>set("ultima_compra",e.target.value)} /></Field>}
-      {/* ASIGNACIÓN + SEGUIMIENTO */}
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Asignar a">
+      {/* ASIGNACIÓN + SEGUIMIENTO — v2: sin "Asignar a" (asignado_a es legacy; la asignación real es assignedTo desde Asignaciones).
+          El valor guardado de asignado_a NO se toca: el formulario lo conserva tal cual al editar. */}
+      <div className={ACCESS_V2?"":"grid grid-cols-2 gap-3"}>
+        {!ACCESS_V2 && <Field label="Asignar a">
           <select className={inpLight} value={d.asignado_a||""} onChange={e=>set("asignado_a",e.target.value)}>
             <option value="">Sin asignar</option>
             {AGENTES.map(a=><option key={a} value={a}>{a}</option>)}
           </select>
-        </Field>
+        </Field>}
         <Field label="Próximo seguimiento"><input type="date" className={inpLight} value={d.proximo_seguimiento||""} onChange={e=>set("proximo_seguimiento",e.target.value)} /></Field>
       </div>
       <Field label="Observaciones del distribuidor"><textarea className={inpLight+" resize-none"} rows={2} value={d.observaciones} onChange={e=>set("observaciones",e.target.value)} /></Field>
@@ -3089,7 +3090,8 @@ function ClientRow({ acciones=null, c, onStatusChange, onEdit, onSchedule, onDel
                 </>
               )}
             </div>
-            {c.asignado_a && <span className="inline-flex items-center gap-1 bg-[#5b21b6]/8 text-[#5b21b6] px-2 py-0.5 rounded-md font-bold text-[10px]"><Ico e="👤" className="mr-1.5" />{c.asignado_a}</span>}
+            {/* v2: no mostrar asignado_a (legacy) como responsable; el responsable real es assignedTo */}
+            {!ACCESS_V2 && c.asignado_a && <span className="inline-flex items-center gap-1 bg-[#5b21b6]/8 text-[#5b21b6] px-2 py-0.5 rounded-md font-bold text-[10px]"><Ico e="👤" className="mr-1.5" />{c.asignado_a}</span>}
           </div>
           {estadoMsg && <div className="mb-2 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5"><Msg>{estadoMsg}</Msg></div>}
 
