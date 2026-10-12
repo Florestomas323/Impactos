@@ -3383,14 +3383,14 @@ function ClientRow({ acciones=null, c, onStatusChange, onEdit, onSchedule, onDel
           {/* Historial */}
           <button onClick={()=>setShowHistory(p=>!p)}
             className="w-full mt-3 flex items-center justify-between px-3 py-2 rounded-xl border border-[#e5def4] bg-[#f4f6f9] hover:bg-[#f1ecfd] transition text-xs font-bold text-[#5b21b6]">
-            <span><Ico e="📊" className="mr-1.5" />{showHistory?"Ocultar historial":"Ver historial"} {historial.length>0?`(${historial.length} contacto${historial.length!==1?"s":""})`:"— sin registros"}</span>
+            <span><Ico e="📊" className="mr-1.5" />{showHistory?"Ocultar historial":"Ver historial"} {historial.length>0?(ACCESS_V2?`(${historial.length} ${historial.length!==1?"gestiones":"gestión"})`:`(${historial.length} contacto${historial.length!==1?"s":""})`):"— sin registros"}</span>
             <span className={`transition-transform duration-200 ${showHistory?"rotate-180":""}`}>▾</span>
           </button>
 
           {showHistory && (
             <div className="mt-2 rounded-xl overflow-hidden border border-[#e5def4]">
               <div className="px-3 py-2 text-xs font-black text-white uppercase tracking-wide" style={{background:RP.navy}}>
-                <Ico e="📊" className="mr-1.5" />Historial de contactos
+                <Ico e="📊" className="mr-1.5" />{ACCESS_V2?"Historial de gestiones":"Historial de contactos"}
               </div>
               {historial.length===0 ? (
                 <div className="p-4 text-center text-xs text-slate-400">Sin registros todavía</div>
