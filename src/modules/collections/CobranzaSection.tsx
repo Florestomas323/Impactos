@@ -2014,10 +2014,12 @@ const FormCliente = ({
 
           <div style={{
         display: "grid",
-        gridTemplateColumns: "1fr 1fr 1fr",
+        gridTemplateColumns: ACCESS_V2 ? "1fr 1fr" : "1fr 1fr 1fr",
         gap: 10
       }}>
-            <label style={{
+            {/* v2: "Tipo de cuenta" (Revolving/Installment) no participa en ninguna lógica de Cobranza → oculto.
+                No se borra: el valor guardado sigue en f.tipoCuenta y se reescribe tal cual. */}
+            {!ACCESS_V2 && <label style={{
           display: "block",
           marginBottom: 12
         }}>
@@ -2029,7 +2031,7 @@ const FormCliente = ({
           }}>
                 <option value="">—</option><option>Revolving</option><option>Installment</option>
               </select>
-            </label>
+            </label>}
             <label style={{
           display: "block",
           marginBottom: 12
@@ -2695,7 +2697,11 @@ const Clientes = ({
         flexWrap: "wrap",
         marginBottom: 16
       }}>
-            <Btn onClick={() => setPagar(detalleC)}><DollarSign size={13} /> PAGO</Btn>
+            <Btn onClick={() => {
+          // v2: cerrar el detalle al abrir el pago → un solo Modal/overlay (mismo patrón que EDITAR)
+          setPagar(detalleC);
+          if (ACCESS_V2) setDetalle(null);
+        }}><DollarSign size={13} /> PAGO</Btn>
             <Btn variant="ghost" onClick={() => {
           setEditar(detalleC);
           setDetalle(null);
