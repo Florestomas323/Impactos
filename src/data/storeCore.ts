@@ -113,7 +113,7 @@ export function apptDoc(a: any, cur: any, ctx: Ctx): any {
        ...APPT_FIJOS_TM, "eliminado"].forEach((k) => { delete out[k]; if (cur[k] !== undefined) out[k] = cur[k]; });
     }
     // El registro de origen tampoco cambia al editar (ni se inventa en citas viejas).
-    ["sourceRecordId", "sourceSection", "sourceRefIndex"].forEach((k) => { delete out[k]; if (cur[k] !== undefined) out[k] = cur[k]; });
+    ["sourceRecordId", "sourceSection", "sourceRefIndex", "sourceRefId"].forEach((k) => { delete out[k]; if (cur[k] !== undefined) out[k] = cur[k]; });
   }
   if (!cur || STAFF.includes(ctx.role)) out.eliminado = a.eliminado === true;   // TLK: conserva lo guardado
   return out;
