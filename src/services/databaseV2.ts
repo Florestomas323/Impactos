@@ -4,6 +4,7 @@
 // NO reemplaza findDuplicate/coincideBusqueda legacy (los usa producción e importación).
 import { trazaRegistro } from "./apptTrace";
 import { canRecordVisitResult, fechaLocal } from "./agendaV2";
+import { mismaReferenciaReferido } from "./referidosV2";
 
 export const lst = (v: any): any[] => (Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : []);
 const vacio = (v: any) => v === undefined || v === null || String(v).trim() === "";
@@ -57,11 +58,12 @@ export function paginar<T>(lista: T[], visibles: number) {
 }
 
 // ── Duplicados (AVISO, nunca bloqueo ni fusión) ──────────────────────────────
-export type Duplicado = { existente: any; seccion: string; motivo: "cuenta" | "telefono" | "origen" | "nombre_direccion"; fuerte: boolean; referidoDe?: any; refIdx?: number };
+// formulario: coincidencia DENTRO del mismo formulario de Referidos (anfitrión ↔ referido o referido ↔ referido).
+export type Duplicado = { existente: any; seccion: string; motivo: "cuenta" | "telefono" | "origen" | "nombre_direccion"; fuerte: boolean; referidoDe?: any; refIdx?: number; formulario?: { a: string; b: string } };
 const SECCIONES_DUP = ["agregados", "prospectos", "distribucion", "referidos"];
 const mismoOrigen = (a: any, b: any) =>
   !vacio(a?.sourceRecordId) && !vacio(b?.sourceRecordId) && String(a.sourceRecordId) === String(b.sourceRecordId)
-  && String(a.sourceSection || "") === String(b.sourceSection || "") && String(a.sourceRefIndex ?? "") === String(b.sourceRefIndex ?? "");
+  && String(a.sourceSection || "") === String(b.sourceSection || "") && mismaReferenciaReferido(a, b);
 // Compara un nuevo registro (o referido) contra todo lo visible. Devuelve el PRIMER motivo por fuerza.
 // ── Mismo cliente por TRAZABILIDAD explícita (solo al EDITAR) ────────────────
 // Clave de un registro: "seccion|id|" o, para un referido anidado, "referidos|idAnfitrión|índice".
@@ -71,7 +73,11 @@ const mismoOrigen = (a: any, b: any) =>
 // teléfono siguen apareciendo. Al crear un registro nuevo no se usa (comportamiento de siempre).
 const refClave = (i: any) => (i === undefined || i === null || String(i).trim() === "" ? "" : String(Number(i)));
 export const claveRegistro = (seccion: any, id: any, refIndex?: any) => `${seccion}|${id}|${refClave(refIndex)}`;
-export const claveOrigen = (r: any) => (!vacio(r?.sourceSection) && !vacio(r?.sourceRecordId) ? claveRegistro(r.sourceSection, r.sourceRecordId, r.sourceRefIndex) : null);
+// Referido con identidad permanente: "referidos|idAnfitrión|#refId" (no depende de su posición).
+export const claveRefId = (anfId: any, refId: any) => `referidos|${anfId}|#${refId}`;
+export const claveOrigen = (r: any) => (vacio(r?.sourceSection) || vacio(r?.sourceRecordId) ? null
+  : r.sourceSection === "referidos" && !vacio(r?.sourceRefId) ? claveRefId(r.sourceRecordId, r.sourceRefId)
+  : claveRegistro(r.sourceSection, r.sourceRecordId, r.sourceRefIndex));
 export function identidadTrazada(registro: any, seccion: string, refIndex?: any): string[] {
   return [vacio(registro?.id) ? null : claveRegistro(seccion, registro.id, refIndex), claveOrigen(registro)].filter(Boolean) as string[];
 }
@@ -89,9 +95,11 @@ export function candidatoDuplicado(nuevo: any, allData: any, opts: { excluirId?:
   if (mismo.size) {   // solo al editar: fuera el propio origen trazado (y lo trazado desde este registro)
     for (let k = candidatos.length - 1; k >= 0; k--) {
       const c = candidatos[k];
-      const propia = c.anfitrion ? claveRegistro("referidos", c.anfitrion.id, c.refIdx) : claveRegistro(c.seccion, c.r.id);
+      const propias = c.anfitrion
+        ? [claveRegistro("referidos", c.anfitrion.id, c.refIdx), ...(vacio(c.r.refId) ? [] : [claveRefId(c.anfitrion.id, c.r.refId)])]
+        : [claveRegistro(c.seccion, c.r.id)];
       const origen = claveOrigen(c.r);
-      if (mismo.has(propia) || (origen && mismo.has(origen))) candidatos.splice(k, 1);
+      if (propias.some((k2) => mismo.has(k2)) || (origen && mismo.has(origen))) candidatos.splice(k, 1);
     }
   }
   const res = (c: any, motivo: Duplicado["motivo"], fuerte: boolean): Duplicado =>
@@ -111,12 +119,54 @@ export function candidatosDuplicadoAnfitrion(anf: any, allData: any, opts: { exc
   const h = candidatoDuplicado({ nombre: anf?.anfitrion, telefono: anf?.anfitrion_telefono, cuenta: anf?.anfitrion_cuenta || anf?.cuenta, direccion: anf?.anfitrion_direccion }, allData,
     { excluirId: opts.excluirId, excluirAnfitrionId: opts.excluirId, ...(ed ? { mismoCliente: identidadTrazada(ed, "referidos") } : {}) });
   if (h) out.push(h);
+  // Identidad de un referido del formulario frente a lo guardado: con refId → su posición GUARDADA + refId
+  // (aunque en el formulario se haya quitado otro y ahora ocupe otra posición); sin refId → posición (legacy).
+  const refsGuardados = ed ? lst(ed.referidos) : [];
+  const propiasRef = (r: any, i: number): string[] => {
+    if (!ed) return [];
+    if (!vacio(r?.refId)) {
+      const j = refsGuardados.findIndex((x: any) => x && String(x.refId ?? "") === String(r.refId));
+      return j < 0 ? [] : [claveRegistro("referidos", ed.id, j), claveRefId(ed.id, r.refId)];
+    }
+    return [claveRegistro("referidos", ed.id, i)];
+  };
   lst(anf?.referidos).forEach((r: any, i: number) => { const d = r && candidatoDuplicado(r, allData,
-    { excluirId: opts.excluirId, excluirAnfitrionId: opts.excluirId, ...(ed ? { mismoCliente: [claveRegistro("referidos", ed.id, i), claveOrigen(r)].filter(Boolean) as string[] } : {}) }); if (d) out.push(d); });
+    { excluirId: opts.excluirId, excluirAnfitrionId: opts.excluirId, ...(ed ? { mismoCliente: [...propiasRef(r, i), claveOrigen(r)].filter(Boolean) as string[] } : {}) }); if (d) out.push(d); });
+  out.push(...duplicadosEnFormulario(anf, ed));
+  return out;
+}
+
+// ── Duplicados DENTRO del mismo formulario de Referidos ──────────────────────
+// Anfitrión ↔ referido y referido ↔ referido con el mismo teléfono (normalizado: últimos 10 dígitos,
+// así "+1 (214) 555-0101", "1-214-555-0101" y "2145550101" son el mismo número).
+// Al editar, un teléfono que YA estaba repetido en lo guardado no vuelve a avisar (no es nuevo).
+const miembrosFormulario = (anf: any) => [
+  { quien: String(anf?.anfitrion || "").trim() || "(anfitrión)", datos: { nombre: anf?.anfitrion, telefono: anf?.anfitrion_telefono } },
+  ...lst(anf?.referidos).map((r: any, i: number) => (r ? { quien: String(r.nombre || "").trim() || `Referido ${i + 1}`, datos: r } : null)).filter(Boolean) as any[],
+];
+const telefonosRepetidos = (anf: any) => {
+  const cuenta = new Map<string, number>();
+  miembrosFormulario(anf).forEach((m) => new Set(telefonosDe(m.datos)).forEach((t) => cuenta.set(t, (cuenta.get(t) || 0) + 1)));
+  return new Set([...cuenta].filter(([, n]) => n > 1).map(([t]) => t));
+};
+export function duplicadosEnFormulario(anf: any, guardado: any = null): Duplicado[] {
+  const yaRepetidos = guardado ? telefonosRepetidos(guardado) : new Set<string>();
+  const vistos = new Map<string, any>(), pares = new Set<string>(), out: Duplicado[] = [];
+  miembrosFormulario(anf).forEach((m, idx) => {
+    new Set(telefonosDe(m.datos)).forEach((t) => {
+      const otro = vistos.get(t);
+      if (!otro) { vistos.set(t, { ...m, idx }); return; }
+      const par = `${otro.idx}-${idx}`;
+      if (yaRepetidos.has(t) || pares.has(par)) return;
+      pares.add(par);
+      out.push({ existente: { ...otro.datos, nombre: otro.quien }, seccion: "formulario", motivo: "telefono", fuerte: true, formulario: { a: m.quien, b: otro.quien } });
+    });
+  });
   return out;
 }
 const SECCION_LABEL: Record<string, string> = { agregados: "Agregados", prospectos: "Prospección", distribucion: "Distribución", referidos: "Referidos" };
 export function textoDuplicado(d: Duplicado) {
+  if (d.formulario) return `Posible duplicado en este formulario: "${d.formulario.a}" y "${d.formulario.b}" tienen el mismo teléfono.`;
   const quien = d.existente?.nombre || d.existente?.anfitrion || "(sin nombre)";
   const donde = d.referidoDe ? `referido de ${d.referidoDe.anfitrion || "un anfitrión"} (Referidos)` : SECCION_LABEL[d.seccion] || d.seccion;
   const por = { cuenta: "el mismo número de cuenta", telefono: "el mismo teléfono", origen: "el mismo registro de origen", nombre_direccion: "el mismo nombre y dirección (coincidencia débil)" }[d.motivo];

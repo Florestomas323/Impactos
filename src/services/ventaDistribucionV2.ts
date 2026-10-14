@@ -6,6 +6,7 @@
 // Anti-duplicado: si el cliente ya está en Distribución, solo se completa con datos nuevos.
 import { esServicio, esVentaServicio, serviceMetricDate } from "./serviceV2";
 import { isCancelled } from "./agendaV2";
+import { mismaReferenciaReferido } from "./referidosV2";
 
 const lst = (v: any): any[] => (Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : []);
 const digitos = (s: any) => String(s || "").replace(/\D/g, "").slice(-10);
@@ -48,7 +49,7 @@ export function buscarEnDistribucionConMotivo(distribucion: any[], a: any): { r:
   // 2) ya se vinculó antes desde el mismo registro de origen
   if (tieneSrc) {
     const r = activos.find((x: any) => x.sourceRecordId != null && String(x.sourceRecordId) === String(a.sourceRecordId)
-      && String(x.sourceSection || "") === String(a.sourceSection || "") && String(x.sourceRefIndex ?? "") === String(a.sourceRefIndex ?? ""));
+      && String(x.sourceSection || "") === String(a.sourceSection || "") && mismaReferenciaReferido(x, a));
     if (r) return { r, motivo: "mismo_origen" };
   }
   // 3) mismo id determinista (venta ya procesada) · 4) teléfono ÚTIL · 5) cuenta ÚTIL
@@ -96,7 +97,7 @@ export function distribucionDesdeVenta(distribucion: any[], a: any, now: Date = 
     nombre: a.nombre || "(Cliente de venta)", telefono: a.telefono || "",
     direccion: a.direccion || "", ciudad: a.ciudad || "", cp: a.cp || "",
     ...(vacio(a.cuenta) ? {} : { cuenta: a.cuenta }),
-    ...(tieneSrc ? { sourceSection: a.sourceSection, sourceRecordId: String(a.sourceRecordId), ...(a.sourceRefIndex != null ? { sourceRefIndex: a.sourceRefIndex } : {}) } : {}),
+    ...(tieneSrc ? { sourceSection: a.sourceSection, sourceRecordId: String(a.sourceRecordId), ...(a.sourceRefIndex != null ? { sourceRefIndex: a.sourceRefIndex } : {}), ...(a.sourceRefId ? { sourceRefId: String(a.sourceRefId) } : {}) } : {}),
     ...(a.createdByUid ? { createdByUid: a.createdByUid } : {}), ...(a.createdByName ? { createdByName: a.createdByName } : {}),
     createdFrom: "venta_distribucion", ventaOrigenApptId: a.id, ventasOrigen: [ref],
     fuente: esServicio(a) ? "Venta en servicio" : "Venta en visita",

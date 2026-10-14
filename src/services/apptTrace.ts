@@ -33,7 +33,9 @@ export const esCitaDe = (a: any, uid: string) => !!a && !!uid && (a.createdByUid
 // Toda cita NUEVA generada desde un registro guarda su id real y su sección.
 // Referidos: el registro real es el documento del anfitrión + el índice del referido.
 // Las citas viejas sin sourceRecordId NO se reescriben: siguen su vínculo visual por nombre.
-export function trazaRegistro(reg: { section?: string; _tipo?: string; recId?: string; id?: any; refIdx?: number; _refDe?: any; _refIdx?: number } | null) {
+// v2: si el referido ya tiene identidad permanente (refId) se guarda también sourceRefId (ver referidosV2.ts);
+// si todavía no la tiene, el sellado central la asigna en ese mismo cambio de estado.
+export function trazaRegistro(reg: { section?: string; _tipo?: string; recId?: string; id?: any; refIdx?: number; _refDe?: any; _refIdx?: number; refId?: any; raw?: any } | null) {
   if (!reg) return {};
   const section = reg.section || reg._tipo;
   if (!section) return {};
@@ -41,7 +43,9 @@ export function trazaRegistro(reg: { section?: string; _tipo?: string; recId?: s
     const anf = reg.recId ?? reg._refDe ?? String(reg.id || "").split("::")[0];
     const idx = reg.refIdx ?? reg._refIdx ?? Number(String(reg.id || "").split("::")[1]);
     if (!anf) return {};
-    return { sourceRecordId: String(anf), sourceSection: "referidos", ...(Number.isFinite(idx) ? { sourceRefIndex: idx } : {}) };
+    const refId = reg.refId ?? reg.raw?.refId;
+    return { sourceRecordId: String(anf), sourceSection: "referidos", ...(Number.isFinite(idx) ? { sourceRefIndex: idx } : {}),
+      ...(Number.isFinite(idx) && refId != null && String(refId) !== "" ? { sourceRefId: String(refId) } : {}) };
   }
   const id = reg.recId ?? reg.id;
   return id == null || id === "" ? {} : { sourceRecordId: String(id), sourceSection: section };

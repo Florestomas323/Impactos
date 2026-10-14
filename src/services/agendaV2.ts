@@ -3,6 +3,7 @@
 // llamada (no hay "por confirmar") y no se asigna distribuidor (assignedTo puede ser null).
 // Quien agenda (createdBy*) NO es necesariamente quien visita (resultBy*).
 // Todo en HORA LOCAL del navegador (Texas): nunca toISOString() para datetime-local.
+import { resolverReferido, mismaReferenciaReferido } from "./referidosV2";
 
 // ── Hora local ──────────────────────────────────────────────────────────────
 const p2 = (n: number) => String(n).padStart(2, "0");
@@ -44,7 +45,7 @@ export const ETIQUETA_RESULTADO: Record<string, string> = {
   venta: "Demo / venta", no_venta: "Demo / no venta", reset: "Re-agendada", recompra: "Recompra",
 };
 export const CAMPOS_RESULTADO = ["resultado", "resultado_detalle", "monto", "producto", "cartucho_meses", "resultByUid", "resultByName", "resultAt"];
-export const CAMPOS_TRAZA = ["createdByUid", "createdByName", "sourceRecordId", "sourceSection", "sourceRefIndex"];
+export const CAMPOS_TRAZA = ["createdByUid", "createdByName", "sourceRecordId", "sourceSection", "sourceRefIndex", "sourceRefId"];
 
 // ── Quién registra el resultado de la VISITA ────────────────────────────────
 // Quien agenda no necesariamente visita: el telemarketing no registra resultados físicos.
@@ -75,7 +76,7 @@ export function reprogramarAntesDeVisita(a: any, nuevaFecha: string, autor: Auto
 export function reprogramarDesdeVisita(a: any, nuevaFecha: string, nota: string, autor: Autor, now: Date, nuevoId: any) {
   const original = registrarResultado(a, "reprogramada_visita", { detalle: nota || a.resultado_detalle || "" }, autor, now);
   const nueva: any = { id: nuevoId, tipo: "cita", _type: "cita", fecha: nuevaFecha };
-  ["nombre", "telefono", "direccion", "ciudad", "cp", "producto", "cuenta", "sourceRecordId", "sourceSection", "sourceRefIndex", "createdByUid", "createdByName", "agente", "appId"].forEach((k) => {
+  ["nombre", "telefono", "direccion", "ciudad", "cp", "producto", "cuenta", "sourceRecordId", "sourceSection", "sourceRefIndex", "sourceRefId", "createdByUid", "createdByName", "agente", "appId"].forEach((k) => {
     if (a[k] !== undefined && a[k] !== null && a[k] !== "") nueva[k] = a[k];
   });
   if (nota) nueva.notas = nota;
@@ -124,7 +125,7 @@ export function duplicateApptCandidate(appts: any[], nueva: any, ventanaMin = 18
     const d = Math.abs(minutos(a.fecha) - m);
     if (isNaN(d)) return false;
     if (nueva.sourceRecordId && a.sourceRecordId) {
-      return String(a.sourceRecordId) === String(nueva.sourceRecordId) && (a.sourceRefIndex ?? null) === (nueva.sourceRefIndex ?? null) && d <= ventanaMin;
+      return String(a.sourceRecordId) === String(nueva.sourceRecordId) && mismaReferenciaReferido(a, nueva) && d <= ventanaMin;
     }
     return !!tel && digitos(a.telefono) === tel && d <= 60;   // manual/legacy: mismo teléfono y misma hora aprox.
   }) || null;
@@ -173,9 +174,10 @@ export function sourceRecordForAppt(state: any, a: any): { section: string; id: 
     const rec = lista.find((r: any) => r && String(r.id) === String(sid));
     if (rec) {
       if (sec === "referidos") {
-        const idx = Number(a.sourceRefIndex);
-        const refs = Array.isArray(rec.referidos) ? rec.referidos : Object.values(rec.referidos || {});
-        if (Number.isInteger(idx) && refs[idx]) return { section: sec, id: String(rec.id), refIdx: idx, via: "source" };
+        // Identidad permanente (sourceRefId) o, en citas antiguas, la posición VERIFICADA contra el
+        // teléfono/nombre de la cita (referidosV2.resolverReferido). Sin vínculo seguro → no se adivina.
+        const r = resolverReferido(rec, a);
+        if (r) return { section: sec, id: String(rec.id), refIdx: r.idx, via: "source" };
       } else return { section: sec, id: String(rec.id), via: "source" };
     }
     return null;              // tiene trazabilidad pero el registro no está: NO adivinar por teléfono
@@ -222,7 +224,7 @@ export function candidatosCartera(allData: any) {
       .map((r: any) => ({ key: `${sec}:${r.id}`, section: sec, recId: String(r.id), nombre: r.nombre || "", telefono: r.telefono || "", direccion: r.direccion || "", ciudad: r.ciudad || "", cp: r.cp || "", producto: r.producto || "" })));
   const refs = (Array.isArray(allData?.referidos) ? allData.referidos : []).filter((a: any) => a && !a.eliminado).flatMap((anf: any) =>
     (Array.isArray(anf.referidos) ? anf.referidos : Object.values(anf.referidos || {})).map((r: any, i: number) => r && (r.nombre || r.telefono)
-      ? { key: `referidos:${anf.id}::${i}`, section: "referidos", recId: String(anf.id), refIdx: i, nombre: r.nombre || "", telefono: r.telefono || "", direccion: r.direccion || "", ciudad: r.ciudad || anf.anfitrion_ciudad || "", cp: r.cp || "", producto: "" }
+      ? { key: `referidos:${anf.id}::${r.refId ? String(r.refId) : i}`, section: "referidos", recId: String(anf.id), refIdx: i, ...(r.refId ? { refId: String(r.refId) } : {}), nombre: r.nombre || "", telefono: r.telefono || "", direccion: r.direccion || "", ciudad: r.ciudad || anf.anfitrion_ciudad || "", cp: r.cp || "", producto: "" }
       : null).filter(Boolean));
   return [...base, ...refs];
 }

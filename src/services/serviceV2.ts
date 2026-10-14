@@ -7,6 +7,7 @@
 import {
   isCancelled, cancelarCita, reprogramarAntesDeVisita, localDayValue, localDateTimeValue, fechaLocal, candidatosCartera,
 } from "./agendaV2";
+import { mismaReferenciaReferido } from "./referidosV2";
 
 type Autor = { uid: string; nombre: string };
 const lst = (v: any): any[] => (Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : []);
@@ -166,7 +167,7 @@ export function duplicateServiceCandidate(appts: any[], nuevo: any, ventanaDias 
     if (!mismoProducto(e.producto, nuevo?.producto)) return false;
     if (conSource && e.sourceRecordId != null && e.sourceRecordId !== "")
       return String(e.sourceRecordId) === String(nuevo.sourceRecordId) && String(e.sourceSection || "") === String(nuevo.sourceSection || "")
-        && String(e.sourceRefIndex ?? "") === String(nuevo.sourceRefIndex ?? "");
+        && mismaReferenciaReferido(e, nuevo);
     const tn = digitos(nuevo?.telefono);
     return tn.length >= 7 && digitos(e.telefono) === tn;
   }) || null;
@@ -174,7 +175,7 @@ export function duplicateServiceCandidate(appts: any[], nuevo: any, ventanaDias 
 
 // ── Mantenimiento futuro después de una venta en servicio ────────────────────
 const sumarMeses = (base: Date, meses: number) => { const d = new Date(base.getFullYear(), base.getMonth(), base.getDate()); d.setMonth(d.getMonth() + meses); return d; };
-const SOURCE = ["sourceRecordId", "sourceSection", "sourceRefIndex"];
+const SOURCE = ["sourceRecordId", "sourceSection", "sourceRefIndex", "sourceRefId"];
 const copiaSource = (a: any) => Object.fromEntries(SOURCE.filter((k) => a?.[k] !== undefined && a[k] !== null && a[k] !== "").map((k) => [k, a[k]]));
 export function mantenimientoDesdeServicio(sv: any, { producto, meses }: { producto?: string; meses: number }, now: Date, id: any) {
   const fecha = localDayValue(sumarMeses(now, Number(meses) || 0)) + "T09:00";      // hora LOCAL
@@ -295,7 +296,7 @@ function mismoClienteYProducto(s: any, item: any) {
   if (!productoIgual(s.producto, item.producto)) return false;
   if (item.sourceRecordId != null && item.sourceRecordId !== "" && s.sourceRecordId != null && s.sourceRecordId !== "")
     return String(s.sourceRecordId) === String(item.sourceRecordId) && String(s.sourceSection || "") === String(item.sourceSection || "")
-      && String(s.sourceRefIndex ?? "") === String(item.sourceRefIndex ?? "");
+      && mismaReferenciaReferido(s, item);
   const t = digitos(item.telefono);
   return t.length >= 7 && digitos(s.telefono) === t;
 }

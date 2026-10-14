@@ -220,7 +220,7 @@ export function ultimaNotaDe(r: any): string {
 
 // ── Bandeja: registros de trabajo de cada especialidad ──────────────────────
 export type Item = {
-  key: string; section: string; recId: string; refIdx?: number; raw: any;
+  key: string; section: string; recId: string; refIdx?: number; refId?: string; raw: any;
   nombre: string; telefono: string; ciudad: string; cp: string; direccion: string;
   fuente: string; anfitrion?: string; estado: string; ultimaNota: string; ultimoContacto: string;
   proximo: string; promesa?: string; etapa?: string; cerrado: boolean; invalido: boolean;
@@ -254,7 +254,7 @@ export function itemsDe(state: any, esp: Especialidad, uid: string): Item[] {
     const refs: Item[] = [];
     vivos(state?.referidos).filter(mio(uid)).forEach((anf: any) => asList(anf.referidos).forEach((r: any, idx: number) => {
       if (!r || (!r.nombre && !r.telefono)) return;
-      refs.push({ ...itemDe(r, "referidos"), key: `referidos:${anf.id}::${idx}`, recId: String(anf.id), refIdx: idx, anfitrion: anf.anfitrion || "", ciudad: r.ciudad || anf.anfitrion_ciudad || "" });
+      refs.push({ ...itemDe(r, "referidos"), key: `referidos:${anf.id}::${r.refId ? String(r.refId) : idx}`, recId: String(anf.id), refIdx: idx, ...(r.refId ? { refId: String(r.refId) } : {}), anfitrion: anf.anfitrion || "", ciudad: r.ciudad || anf.anfitrion_ciudad || "" });
     }));
     return [
       ...vivos(state?.agregados).filter(mio(uid)).map((r: any) => itemDe(r, "agregados")),
