@@ -22,6 +22,8 @@ import { trazarCambiosAppts, sourceRecordForAppt, localDateTimeValue, detallesEv
 import { contarVentasDemosV2, serviceMetricDate, serviciosRealizados, ventaServicioCartucho, ventasServicioDe, apptsDelGrupo, ultimoCambioCartucho, tiempoHumano, alertasCartucho, servicioDesdeCartucho, duplicateServiceCandidate, candidatosServicio, estadoServicio, ESTADO_SERVICIO } from "./services/serviceV2";
 import { ServicioAccionesV2, ServiciosV2 } from "./components/servicio/ServicioV2";
 import { DatabaseV2, AvisoDuplicadoDB, VerMasDB } from "./components/database/DatabaseV2";
+import { sellarReferidos, transicionObsequio, relevoObsequioStaff, progresoObsequio, actualizarReferido } from "./services/referidosV2";
+import { esStaffShared } from "./data/schema";
 import { coincideBusquedaV2, paginar as paginarDB, candidatoDuplicado as candidatoDuplicadoDB, candidatosDuplicadoAnfitrion, accionesRegistroV2, ventaDesdeRegistro, camposVenta, clavesReferidos, correccionDesdeRegistro, ventaVisibleDistribucion, ultimaVentaOrigen, seccionDeTipo, camposResultadoFisico, identidadTrazada } from "./services/databaseV2";
 import { reconciliarDistribucionPorVenta, aplicarVentaEnEstado, TEXTO_MOTIVO_VINCULO } from "./services/ventaDistribucionV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
@@ -3544,9 +3546,18 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
     if(setAppts) setAppts(p=>[{...appt,...(ACCESS_V2&&scheduleClient?trazaRegistro({...scheduleClient, section:scheduleClient._tipo||({agregado:"agregados",prospecto:"prospectos",referido:"referidos",distribucion:"distribucion"})[type]}):{}),id:genId(),_type:appt.tipo},...p]); // v2: cita ligada a su registro
 
     // ── OBJETIVO 3: Actualizar tarjeta del cliente con datos del appt ──
+    // v2: un referido vive DENTRO de su anfitrión (id "anfitrión::posición") → se actualiza ese referido
+    // (por su identidad permanente si la tiene). Legacy: igual que siempre.
+    const refDeCita = ACCESS_V2 && scheduleClient && type==="referido" && typeof scheduleClient.id==="string" && scheduleClient.id.includes("::")
+      ? { anfId:scheduleClient.id.split("::")[0], idx:Number(scheduleClient.id.split("::")[1]), refId:scheduleClient.refId } : null;
     if(scheduleClient){
       setData(p=>p.map(x=>{
+        if(refDeCita){ return x.id!==refDeCita.anfId ? x : actualizarReferido(x, refDeCita.refId, refDeCita.idx, r=>datosCitaEnTarjeta(r)); }
         if(x.id!==scheduleClient.id) return x;
+        return datosCitaEnTarjeta(x);
+      }));
+    }
+    function datosCitaEnTarjeta(x){
         const upd={...x};
         // Teléfono: solo rellenar si está vacío
         if(!upd.telefono && appt.telefono) upd.telefono=appt.telefono;
@@ -3572,7 +3583,6 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
         upd.ultima_cita_programada=(appt.fecha||"").slice(0,16);
         upd.actualizado=new Date().toISOString();
         return upd;
-      }));
     }
 
     setCalMsg(`✅ ${EVENT_CONFIG[appt.tipo]?.emoji||"📋"} ${appt.nombre} — cita guardada en Agenda y se abrió Google Calendar: solo toca GUARDAR allá.`);
@@ -3748,10 +3758,12 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
             {/* Resumen de progreso de referidos (para obsequio) */}
             {(()=>{
               const refs=lst(c.referidos);
-              const citas=refs.filter(r=>r.estado==="verde").length;
-              const ventas=refs.filter(r=>r.venta||r.resultado==="venta").length;
+              // v2: misma regla (4 citas o 1 venta), contando por referido sus citas y ventas reales (referidosV2.progresoObsequio)
+              const progV2 = v2 ? progresoObsequio(c, allData?.appts||[]) : null;
+              const citas=v2 ? progV2.citas : refs.filter(r=>r.estado==="verde").length;
+              const ventas=v2 ? progV2.ventas : refs.filter(r=>r.venta||r.resultado==="venta").length;
               if(refs.length===0) return null;
-              const lograObsequio = citas>=4 || ventas>=1;
+              const lograObsequio = v2 ? (progV2.logrado || !!c.obsequioLogrado) : (citas>=4 || ventas>=1);   // v2: un logro ya registrado no se pierde al quitar un referido
               return (
                 <div className={`mt-2 flex items-center gap-2 flex-wrap text-[10px] font-bold px-2.5 py-1.5 rounded-lg ${lograObsequio?"bg-amber-50 text-amber-700 border border-amber-200":"bg-[#f4f6f9] text-slate-500"}`}>
                   <span>{refs.length} referido(s)</span>
@@ -3777,12 +3789,14 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
                 };
                 const patchRef=(patch)=>setData(p=>p.map(anf=>{
                   if(anf.id!==c.id) return anf;
+                  if(v2) return actualizarReferido(anf, r.refId, i, x=>({...x,...patch}));   // v2: por refId (si lo tiene)
                   const refs=[...lst(anf.referidos)];
                   refs[i]={...refs[i],...patch};
                   return {...anf,referidos:refs};
                 }));
                 const saveHist=(entry)=>setData(p=>p.map(anf=>{
                   if(anf.id!==c.id) return anf;
+                  if(v2) return actualizarReferido(anf, r.refId, i, x=>({...x,historial:[...lst(x.historial),{...entry, uid:v2.autor.uid, nombre:v2.autor.nombre}]}));
                   const refs=[...lst(anf.referidos)];
                   refs[i]={...refs[i],historial:[...lst(refs[i].historial),v2?{...entry, uid:v2.autor.uid, nombre:v2.autor.nombre}:entry]};
                   return {...anf,referidos:refs};
@@ -3797,7 +3811,7 @@ function DBSection({ data, setData, type, title, onCallLog, role, allData, agent
                     onApptResult={(cc,rid,detail="",monto="",producto="",cartucho_meses=0)=>{
                       if(v2 && !accRefV2.resultadoFisico) return;   // guard v2: telemarketing no registra resultado físico
                       // v2: cambio del referido i dentro del documento del anfitrión (misma forma que patchRef)
-                      const conRef=(patch)=>(anf)=>{ const refs=[...lst(anf.referidos)]; refs[i]={...refs[i],...patch}; return {...anf,referidos:refs}; };
+                      const conRef=(patch)=>(anf)=>actualizarReferido(anf, r.refId, i, x=>({...x,...patch}));   // por refId (si lo tiene)
                       if(v2 && rid!=="demo_venta"){
                         // v2: corrección + campos del resultado (MISMOS que la tarjeta normal) en UNA transición; sin patchRef después
                         const { patch, reconciliar } = correccionDesdeRegistro(refCard, rid, v2.autor, new Date());
@@ -5025,7 +5039,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
     } }:null;
   const guardarV2=(appt, forzar=false)=>{
     const c=clienteV2 && clienteV2!=="manual" ? clienteV2 : null;
-    const nueva={...appt, id:genId(), _type:appt.tipo, ...(c?{ sourceSection:c.section, sourceRecordId:c.recId, ...(c.refIdx!==undefined?{sourceRefIndex:c.refIdx}:{}) }:{})};
+    const nueva={...appt, id:genId(), _type:appt.tipo, ...(c?{ sourceSection:c.section, sourceRecordId:c.recId, ...(c.refIdx!==undefined?{sourceRefIndex:c.refIdx}:{}), ...(c.refIdx!==undefined&&c.refId?{sourceRefId:c.refId}:{}) }:{})};
     // Servicio: su propia regla de duplicado (una cita comercial NO duplica un servicio).
     const existente=!forzar && (appt.tipo==="servicio" ? duplicateServiceCandidate(appts, nueva) : duplicateApptCandidate(appts, nueva));
     if(existente){ setDupV2({appt, existente}); return; }
@@ -5415,8 +5429,17 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts,
   });
   vencidos.sort((a,b)=>b._diasVencido-a._diasVencido);
 
+  // v2: escribe sobre el referido por su identidad permanente (refId) si la tiene; si no, por posición.
+  // El refId sale de la misma lista que pintó la tarjeta (id "anf::i"), así un referido quitado o
+  // reordenado entretanto no desvía la escritura a otro. El obsequio lo calcula el sellado central (App).
+  const escribirReferidoV2=(id,fn)=>{
+    const [refDe,refIdx]=String(id).split("::");
+    const refId=flattenReferidos(data.referidos).find(x=>x.id===id)?.refId;
+    setData("referidos", p=>p.map(anf=>String(anf.id)!==refDe ? anf : actualizarReferido(anf, refId, +refIdx, fn)));
+  };
   // Actualiza un referido dentro de su anfitrión y revisa si toca obsequio
   const updateReferido=(refDe,refIdx,patch)=>{
+    if(ACCESS_V2){ escribirReferidoV2(`${refDe}::${refIdx}`, r=>({...r,...patch})); return; }
     setData("referidos", p=>p.map(anf=>{
       if(anf.id!==refDe) return anf;
       const refs=[...lst(anf.referidos)];
@@ -5450,6 +5473,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts,
   };
   const saveHistorial=(id,tipo,entry)=>{
     if(tipo==="referidos"){
+      if(ACCESS_V2){ escribirReferidoV2(id, r=>({...r, historial:[...lst(r.historial), entry]})); return; }
       const [refDe,refIdx]=id.split("::");
       setData("referidos", p=>p.map(anf=>{
         if(anf.id!==refDe) return anf;
@@ -5465,6 +5489,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts,
   const marcarLlamado=(id,tipo)=>{
     const ahora=new Date().toISOString();
     if(tipo==="referidos"){
+      if(ACCESS_V2){ escribirReferidoV2(id, r=>({...r, ultimo_llamado:ahora})); return; }
       const [refDe,refIdx]=id.split("::");
       setData("referidos", p=>p.map(anf=>{
         if(anf.id!==refDe) return anf;
@@ -5478,6 +5503,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts,
   };
   const saveNota=(id,tipo,texto)=>{
     if(tipo==="referidos"){
+      if(ACCESS_V2){ escribirReferidoV2(id, r=>agregarNota(r, texto, agente)); return; }
       const [refDe,refIdx]=id.split("::");
       setData("referidos", p=>p.map(anf=>{
         if(anf.id!==refDe) return anf;
@@ -5492,6 +5518,7 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts,
   // Eliminar una entrada del historial (llamada/cita) desde el área de Llamadas
   const deleteHist=(id,tipo,entryKey)=>{
     if(tipo==="referidos"){
+      if(ACCESS_V2){ escribirReferidoV2(id, r=>({...r, historial:lst(r.historial).filter(h=>(h.id||h.fecha)!==entryKey)})); return; }
       const [refDe,refIdx]=id.split("::");
       setData("referidos", p=>p.map(anf=>{
         if(anf.id!==refDe) return anf;
@@ -5547,7 +5574,10 @@ function CallControl({ data, setData, onCallLog, role, agente, notify, setAppts,
         upd.actualizado=new Date().toISOString();
         return upd;
       });
-      if(tipo==="referidos"){
+      if(tipo==="referidos" && ACCESS_V2){
+        // (el referido no tiene id propio: se compara con el de la tarjeta y se conserva el suyo, si lo hubiera)
+        escribirReferidoV2(sc.id, r=>{ const {id:_x,...u}=actualizarCliente([{...r, id:sc.id}])[0]; return r.id!==undefined?{...u, id:r.id}:u; });
+      } else if(tipo==="referidos"){
         const [refDe,refIdx]=sc.id.split("::");
         setData("referidos",p=>p.map(anf=>{
           if(anf.id!==refDe) return anf;
@@ -8709,9 +8739,21 @@ function AppRoot() {
     reclutamiento:[], controlCierres:[], cumpleMsgTpl:""
   }),[]);
   // ACCESS_V2 es constante de compilación: siempre se llama el MISMO hook en cada render.
-  const [state,setState,synced,fbError,reintentarFb,hydrated]= ACCESS_V2
+  const [state,setStateBase,synced,fbError,reintentarFb,hydrated]= ACCESS_V2
     ? useV2Store(v2User, getDB, v2Defaults)
     : useSharedState(authReady && !!authUser);
+  // v2 · Referidos: TODO cambio de estado pasa por (1) el sellado de identidad permanente (refId en
+  // referidos tocados; sourceRefId en citas/Distribución nuevas) y (2) el aviso ÚNICO de obsequio
+  // (src/services/referidosV2.ts). Así cubre Base de Datos, Llamadas, Agenda, Servicio y ventas por igual.
+  // Legacy: el setState de siempre.
+  const v2UserRef=useRef(v2User); v2UserRef.current=v2User;
+  const setStateV2=useCallback(fn=>setStateBase(s=>{
+    const n=typeof fn==="function"?fn(s):fn;
+    if(n===s) return s;
+    const u=v2UserRef.current;
+    return transicionObsequio(s, sellarReferidos(s,n), u?{uid:u.uid,nombre:u.nombre}:null, u?.role||"");
+  }),[setStateBase]);
+  const setState = ACCESS_V2 ? setStateV2 : setStateBase;
   // Sincroniza el mapa dinámico ANTES de resolver el rol (corre en cada render, es barato)
   setCuentasDinamicas(state?.cuentasCustom||[]);
   setCumpleMsgTpl(state?.cumpleMsgTpl||"");
@@ -8784,6 +8826,11 @@ function AppRoot() {
 
   useNotifPermission();
   const {notifs,noLeidas,notify,marcarLeidas,marcarUnaLeida}=useNotificaciones(state,setState,agenteActivo);
+  // v2 · Obsequio cumplido por un telemarketing → el staff recibe UNA notificación en las compartidas.
+  useEffect(()=>{
+    if(!(ACCESS_V2 && v2User && synced && esStaffShared(v2User.role))) return;
+    setState(s=>relevoObsequioStaff(s));
+  },[state.referidos, synced, v2User?.role]);
 
   // ── Revisar cumpleaños y notificar 2 días antes + el día ──
   useEffect(()=>{
