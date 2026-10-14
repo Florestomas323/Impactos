@@ -830,7 +830,9 @@ test("T · Simétrico: editar el registro de ORIGEN no alerta contra la ficha de
   // si el formulario agrega un referido nuevo con el teléfono de Juan (índice 2) → SÍ alerta contra la ficha dv_j
   const conNuevo = { ...host, referidos: [...host.referidos, { nombre: "Juan otra vez", telefono: "2145550102" }] };
   const ds = candidatosDuplicadoAnfitrion(conNuevo, allR, { excluirId: "anf1", editando: host });
-  assert.deepEqual(ds.map((d) => d.existente.id), ["dv_j"]);
+  assert.deepEqual(ds.filter((d) => d.seccion !== "formulario").map((d) => d.existente.id), ["dv_j"]);
+  // …y además avisa que Juan quedó dos veces en el mismo formulario (mejora Referidos r1)
+  assert.deepEqual(ds.filter((d) => d.seccion === "formulario").map((d) => d.formulario), [{ a: "Juan otra vez", b: "Juan" }]);
 });
 
 test("T6 · Alta NUEVA manual: sin exclusiones extra (detecta el origen y la ficha trazada como siempre)", () => {
