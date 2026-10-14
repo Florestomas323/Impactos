@@ -8,6 +8,7 @@ import { Ico } from "../../iconos";
 import { genId } from "../../utils/ids";
 import { asList } from "../../services/assignments";
 import { trazaRegistro } from "../../services/apptTrace";
+import { actualizarReferido } from "../../services/referidosV2";
 import { citaDesdeLlamada, revisarDuplicado } from "../../services/agendaV2";
 import { AvisoDuplicadoV2, CalendariosV2 } from "../agenda/AgendaV2Extras";
 import {
@@ -79,13 +80,8 @@ export function CallCenterV2({ user, esp, state, setSection, setAppts, onCallLog
   // ── Escritura: siempre sobre el registro real (referido dentro de su anfitrión; cobranza en clientesData) ──
   const actualizar = (it: Item, fn: (r: any) => any) => {
     if (it.section === "referidos") {
-      setSection("referidos", (p: any[]) => p.map((anf: any) => {
-        if (String(anf.id) !== it.recId) return anf;
-        const refs = anf.referidos;
-        if (Array.isArray(refs)) return { ...anf, referidos: refs.map((r: any, i: number) => (i === it.refIdx ? fn(r) : r)) };
-        const clave = Object.keys(refs || {})[it.refIdx as number];
-        return clave === undefined ? anf : { ...anf, referidos: { ...refs, [clave]: fn(refs[clave]) } };
-      }));
+      // v2: el referido se ubica por su identidad permanente (refId) si la tiene; si no, por posición (legacy).
+      setSection("referidos", (p: any[]) => p.map((anf: any) => (String(anf.id) !== it.recId ? anf : actualizarReferido(anf, it.refId, it.refIdx as number, fn))));
     } else if (it.section === "cobranza") {
       setSection("cobranza", (c: any) => ({ ...c, clientesData: { ...(c?.clientesData || {}), [it.recId]: fn((c?.clientesData || {})[it.recId] || {}) } }));
     } else {
