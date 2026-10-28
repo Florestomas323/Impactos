@@ -27,6 +27,7 @@ import { sellarReferidos, transicionObsequio, relevoObsequioStaff, progresoObseq
 import { esStaffShared } from "./data/schema";
 import { coincideBusquedaV2, paginar as paginarDB, candidatoDuplicado as candidatoDuplicadoDB, candidatosDuplicadoAnfitrion, accionesRegistroV2, ventaDesdeRegistro, camposVenta, clavesReferidos, correccionDesdeRegistro, ventaVisibleDistribucion, ultimaVentaOrigen, seccionDeTipo, camposResultadoFisico, identidadTrazada } from "./services/databaseV2";
 import { reconciliarDistribucionPorVenta, aplicarVentaEnEstado, TEXTO_MOTIVO_VINCULO } from "./services/ventaDistribucionV2";
+import { accionTrasActualizarCita, registroConVentaDeCita, reconciliarVentaAgendaEnEstado } from "./services/ventaAgendaV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
 import { RutasEquipoV2 } from "./components/rutas/RutasEquipoV2";
@@ -5020,7 +5021,10 @@ function CalendarioAgenda({ appts, onUpdate, onDelete, v2=null }) {
 
 // init (solo v2): {filtro, filtroTipo, filtroResultado, abrirTipo, abrirMenu} — llega desde el Centro de mando.
 // tiposPermitidos (solo v2): tipos de agenda que el rol puede crear. Sin estas props: igual que siempre.
-function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitidos=null, v2User=null, allData=null, onVentaDistribucion=null }) {
+function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitidos=null, v2User=null, allData=null, onVentaDistribucion=null, onVentaCorreccion=null }) {
+  // Después de actualizar una cita: venta nueva → sincronizar (igual que siempre). v2: una cita ya
+  // sincronizada que cambia de resultado → reconciliar su venta (src/services/ventaAgendaV2.ts).
+  const trasActualizarCita=u=>{ const acc=accionTrasActualizarCita(u, !!onVentaCorreccion); if(acc==="sincronizar" && onVentaSync) onVentaSync(u); else if(acc==="reconciliar") onVentaCorreccion(u); };
   const [showForm,setShowForm]=useState(!!init?.abrirTipo);const [menuOpen,setMenuOpen]=useState(!!init?.abrirMenu);
   const [preType,setPreType]=useState(init?.abrirTipo||null);const [calLoading,setCalLoading]=useState(false);const [calMsg,setCalMsg]=useState("");
   // ── v2 (ACCESS_V2): lógica en services/agendaV2.ts ──
@@ -5258,7 +5262,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
       {/* Calendario (día / semana / mes / año) */}
       {vista==="calendario" && (
         <CalendarioAgenda appts={base} v2={cfgV2}
-          onUpdate={u=>{setAppts(p=>p.map(x=>x.id===u.id?u:x)); if(u.resultado==="demo_venta" && !u._sincronizado && onVentaSync) onVentaSync(u);}}
+          onUpdate={u=>{setAppts(p=>p.map(x=>x.id===u.id?u:x)); trasActualizarCita(u);}}
           onDelete={id=>setAppts(p=>p.filter(x=>x.id!==id))} />
       )}
 
@@ -5273,7 +5277,7 @@ function Agenda({ appts, setAppts, agente, onVentaSync, init=null, tiposPermitid
               <div key={a.id} className={`bg-white border-2 border-[#e8edf3] border-l-4 rounded-2xl shadow-sm ${TIPO_BORDER[a._type]||"border-l-slate-300"} ${esPasada&&!a.resultado?"ring-1 ring-amber-200":""}${V2&&isCancelledV2(a)?" opacity-70":""}`}
                 style={V2?{borderLeftColor:colorBordeCita(a)}:undefined}>
                 <CitaCard a={a} mostrarFecha={filtro!=="hoy"} esPasada={esPasada} v2={cfgV2}
-                  onUpdate={u=>{setAppts(p=>p.map(x=>x.id===u.id?u:x)); if(u.resultado==="demo_venta" && !u._sincronizado && onVentaSync) onVentaSync(u);}}
+                  onUpdate={u=>{setAppts(p=>p.map(x=>x.id===u.id?u:x)); trasActualizarCita(u);}}
                   onDelete={id=>setAppts(p=>p.filter(x=>x.id!==id))} />
               </div>
             );
@@ -8939,14 +8943,14 @@ function AppRoot() {
     setState(s0=>{ const out=(s=>{
       const tel=soloNum(appt.telefono||"");
       const monto=Number(appt.monto)||0;
-      const histEntry=makeHistorialEntry({ tipo:"cita", cita_resultado:"demo_venta", notas:`💰 Venta agendada en Agenda${appt.producto?` — ${appt.producto}`:""}`, agente:appt.agente||"", monto, producto:appt.producto||"", cartucho_meses:appt.cartucho_meses||0 });
+      const histEntry={...makeHistorialEntry({ tipo:"cita", cita_resultado:"demo_venta", notas:`💰 Venta agendada en Agenda${appt.producto?` — ${appt.producto}`:""}`, agente:appt.agente||"", monto, producto:appt.producto||"", cartucho_meses:appt.cartucho_meses||0 }), ...(ACCESS_V2?{ apptId:appt.id }:{})};   // v2: liga la venta a ESTA cita
       let grupo=null, encontradoId=null;
       const patch={};
       if(ACCESS_V2){
         // v2: sourceSection + sourceRecordId (+ sourceRefIndex) mandan; teléfono solo sin trazabilidad.
         const src=sourceRecordForAppt(s, appt);
         if(src && src.section==="referidos"){
-          const upd=(r)=>({...r, venta:true, resultado:"demo_venta", ultimo_monto_venta:monto||r.ultimo_monto_venta, ultimo_producto:appt.producto||r.ultimo_producto, historial:[...(Array.isArray(r.historial)?r.historial:[]), histEntry]});
+          const upd=(r)=>registroConVentaDeCita(r, appt, histEntry, { historialSoloArreglo:true });
           patch.referidos=(s.referidos||[]).map(anf=>{
             if(String(anf.id)!==src.id) return anf;
             if(Array.isArray(anf.referidos)) return {...anf, referidos:anf.referidos.map((r,i)=>i===src.refIdx?upd(r):r)};
@@ -8965,7 +8969,8 @@ function AppRoot() {
         }
       }
       if(grupo && encontradoId){
-        patch[grupo]=(s[grupo]||[]).map(c=>String(c.id)===String(encontradoId)?{...c, venta:true, resultado:"demo_venta", ultimo_monto_venta:monto||c.ultimo_monto_venta, ultimo_producto:appt.producto||c.ultimo_producto, ultimo_cartucho_meses:appt.cartucho_meses||c.ultimo_cartucho_meses, historial:[...lst(c.historial), histEntry]}:c);
+        patch[grupo]=(s[grupo]||[]).map(c=>String(c.id)===String(encontradoId)?(ACCESS_V2 ? registroConVentaDeCita(c, appt, histEntry, { cartucho:true })   // v2: mismos campos (src/services/ventaAgendaV2.ts)
+          : {...c, venta:true, resultado:"demo_venta", ultimo_monto_venta:monto||c.ultimo_monto_venta, ultimo_producto:appt.producto||c.ultimo_producto, ultimo_cartucho_meses:appt.cartucho_meses||c.ultimo_cartucho_meses, historial:[...lst(c.historial), histEntry]}):c);
       } else {
         const nuevo={ id:genId(), nombre:appt.nombre||"(Cliente de agenda)", telefono:appt.telefono||"", fuente:"Agenda", producto:appt.producto||"", ciudad:appt.ciudad||"", cp:"", direccion:appt.direccion||"", observaciones:"Venta agendada directo en Agenda", detalles:"", estado:"verde", venta:true, resultado:"demo_venta", ultimo_monto_venta:monto, ultimo_producto:appt.producto||"", ultimo_cartucho_meses:appt.cartucho_meses||0, ultimaNota:"", notas:[], historial:[histEntry], proximo_seguimiento:"", creado:new Date().toISOString(), actualizado:"", _origenAgenda:true };
         grupo="prospectos"; encontradoId=nuevo.id;
@@ -8974,6 +8979,17 @@ function AppRoot() {
       patch.appts=(s.appts||[]).map(a=>a.id===appt.id?{...a, _sincronizado:true, _clienteId:encontradoId, _clienteGrupo:grupo}:a);
       return {...s, ...patch};
     })(s0); return conDistribucionV2(out, appt); });   // v2: + Distribución (legacy: sin cambios)
+  };
+  // v2 · Corrección / restauración de una venta de Agenda ya sincronizada (Demo / venta ↔ otro resultado):
+  // registro de origen (historial de ESA cita) + Distribución en UNA transición de estado. Solo staff.
+  const corregirVentaAgenda=(appt)=>{
+    if(!ACCESS_V2 || !v2User || !canRecordVisitResult(v2User.role) || !appt) return;
+    setState(s=>{
+      const actual=(s.appts||[]).find(a=>String(a.id)===String(appt.id));   // ya trazada por setAppts
+      if(!actual || !actual._sincronizado) return s;
+      const r=reconciliarVentaAgendaEnEstado(s, actual, sourceRecordForAppt(s, actual), new Date(), { uid:v2User.uid, nombre:v2User.nombre });
+      return conDistribucionV2(r.state, actual);
+    });
   };
   const onCallLog=()=>{const today=hoyLocal();const ag=agenteActivo||"Equipo";setState(s=>{const dia=clObj((s.callLog||{})[today]);return {...s,callLog:{...(s.callLog||{}),[today]:{...dia,[ag]:(+dia[ag]||0)+1}}};});};
   // navegación rápida desde el dashboard
@@ -9354,7 +9370,7 @@ function AppRoot() {
             {tab==="inicio" && ACCESS_V2 && v2User && <CommandCenterV2 user={v2User} state={state} appts={state.appts||[]} callLog={state.callLog||{}} contarVentasDemos={contarVentasDemos} canTab={canTab}
               irA={(t,intent)=>{ setNavIntent(intent?{...intent,tab:t,key:Date.now()}:null); goTo(t); }} />}
             {tab==="inicio" && !(ACCESS_V2 && v2User) && <Dashboard allData={allData} appts={state.appts||[]} setAppts={setAppts} callLog={state.callLog} agente={agenteActivo} goTo={goTo} incentivos={state.incentivos||[]} cofreConfig={state.cofreConfig} cofreAperturas={state.cofreAperturas||[]} abrirCofre={abrirCofre} rolActivo={rolUsuario} respaldos={state.respaldos||[]} registrarRespaldo={registrarRespaldo} cumpleanos={state.cumpleanos||[]} />}
-            {tab==="agenda" && <Agenda key={ACCESS_V2?(navIntent?.key||"agenda"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} onVentaSync={sincronizarVentaAgenda} {...(ACCESS_V2&&v2User?{v2User, allData:state, onVentaDistribucion:asegurarDistribucionPorVenta}:{})}
+            {tab==="agenda" && <Agenda key={ACCESS_V2?(navIntent?.key||"agenda"):undefined} appts={state.appts||[]} setAppts={setAppts} agente={agenteActivo} onVentaSync={sincronizarVentaAgenda} {...(ACCESS_V2&&v2User?{v2User, allData:state, onVentaDistribucion:asegurarDistribucionPorVenta, onVentaCorreccion:corregirVentaAgenda}:{})}
               init={ACCESS_V2 && navIntent?.tab==="agenda" ? navIntent : null}
               tiposPermitidos={ACCESS_V2 && v2User ? TIPOS_AGENDA_POR_ROL[v2User.role] : null} />}
             {tab==="llamadas" && ACCESS_V2 && v2User && especialidadDe(v2User.role) && <CallCenterV2 user={v2User} esp={especialidadDe(v2User.role)} state={state}
