@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   accionTrasActualizarCita, registroConVentaDeCita, reconciliarVentaAgendaEnEstado, reconciliarRegistroPorCita,
-  entradaDeCita, MARCA_VENTA_AGENDA,
+  entradaDeCita, MARCA_VENTA_AGENDA, decidirVentaCitaV2, refsVentaDeCita,
 } from "../src/services/ventaAgendaV2";
 import { reconciliarDistribucionPorVenta } from "../src/services/ventaDistribucionV2";
 import { registrarResultado, sourceRecordForAppt } from "../src/services/agendaV2";
@@ -43,10 +43,12 @@ function ventaInicial(s: any, apptId: any, now: Date, autor = DIST) {
 }
 function corregir(s: any, apptId: any, now: Date, autor = DIST) {
   const actual = s.appts.find((a: any) => a.id === apptId);
-  if (!actual._sincronizado) return s;
-  const r = reconciliarVentaAgendaEnEstado(s, actual, sourceRecordForAppt(s, actual), now, autor);
-  const d = reconciliarDistribucionPorVenta(r.state.distribucion, actual, now, autor);
-  return d.accion !== "sin_cambios" && d.accion !== "omitido" ? { ...r.state, distribucion: d.lista } : r.state;
+  const d = decidirVentaCitaV2(s, actual);                       // igual que corregirVentaAgenda en App
+  if (d === "venta_inicial") return ventaInicial(s, apptId, now, autor);
+  if (d !== "reconciliar") return s;
+  const r = reconciliarVentaAgendaEnEstado(s, actual, undefined, now, autor);
+  const dist = reconciliarDistribucionPorVenta(r.state.distribucion, actual, now, autor);
+  return dist.accion !== "sin_cambios" && dist.accion !== "omitido" ? { ...r.state, distribucion: dist.lista } : r.state;
 }
 // Lo que hace la Agenda al tocar un resultado: setAppts(registrarResultado) y luego la acción.
 function resultado(s: any, apptId: any, res: string, datos: any, now: Date, autor = DIST) {
@@ -224,15 +226,163 @@ test("acción tras actualizar una cita: legacy (v2 = false) idéntico a la condi
     { tipo: "servicio", resultado: "venta_servicio", _sincronizado: true },
   ];
   for (const u of casos) assert.equal(accionTrasActualizarCita(u, false), siempre(u), JSON.stringify(u));
-  // v2: una cita sincronizada que cambia → reconciliar; servicios siguen su propio flujo
+  // v2: toda cita pasa a App, que decide con evidencia (decidirVentaCitaV2); servicios siguen su flujo
   assert.equal(accionTrasActualizarCita({ resultado: "demo_no_venta", _sincronizado: true }, true), "reconciliar");
+  assert.equal(accionTrasActualizarCita({ resultado: "demo_no_venta" }, true), "reconciliar");
   assert.equal(accionTrasActualizarCita({ tipo: "servicio", resultado: "venta_servicio", _sincronizado: true }, true), null);
 });
 
 test("App: legacy sin cambios — la corrección solo existe en v2 y solo para staff", () => {
   assert.ok(APP.includes("onVentaCorreccion:corregirVentaAgenda}:{})}"), "la prop solo se pasa con ACCESS_V2 && v2User");
-  assert.ok(APP.includes("if(!ACCESS_V2 || !v2User || !canRecordVisitResult(v2User.role) || !appt) return;"));
+  assert.ok(APP.includes("if(!ACCESS_V2 || !v2User || !canRecordVisitResult(v2User.role)){"));
+  assert.ok(APP.includes("if(appt.resultado===\"demo_venta\" && !appt._sincronizado) sincronizarVentaAgenda(appt);   // igual que antes"));
+  assert.ok(APP.includes("const ventaInicialEnEstado=(s0, appt)=>{ let r=s0; sincronizarVentaAgenda(appt, paso=>{ r=paso(s0); }); return r; };"), "v2 reutiliza el MISMO paso de venta inicial");
+  assert.ok(APP.includes("const sincronizarVentaAgenda=(appt, aplicar=setState)=>{"), "legacy: sigue usando setState");
   assert.ok(APP.includes("...(ACCESS_V2?{ apptId:appt.id }:{})"), "apptId en el historial solo en v2");
   assert.ok(APP.includes(": {...c, venta:true, resultado:\"demo_venta\", ultimo_monto_venta:monto||c.ultimo_monto_venta"), "rama legacy intacta");
   assert.equal((APP.match(/trasActualizarCita\(u\)/g) || []).length, 2);
+});
+
+// ════════ Ventas HISTÓRICAS (creadas antes de ventaAgendaV2): self-heal al tocarlas ════════
+// Estado pre-fix: historial SIN apptId; Distribución con ventasOrigen[].apptId (eso sí existía).
+const NOTA = `${MARCA_VENTA_AGENDA} — Sistema de cocina`;
+const entradaVieja = (id: string, x: any = {}) => ({ id, tipo: "cita", estado: "", notas: NOTA, agente: "Tomas", cita_resultado: "demo_venta",
+  monto: 1, producto: "Sistema de cocina", cartucho_meses: 0, fecha: NOW.toISOString(), ...x });
+const refVieja = (apptId: string, x: any = {}) => ({ apptId, tipo: "cita", resultado: "demo_venta", fecha: FECHA_CITA, monto: 1, producto: "Sistema de cocina", ...x });
+const fichaVieja = (apptId: string, refs: any[], x: any = {}) => ({ id: `dv_${apptId}`, nombre: "QA Reg Ref Dos", telefono: "5552810003",
+  sourceSection: "agregados", sourceRecordId: "c1", createdFrom: "venta_distribucion", ventaOrigenApptId: apptId, ventasOrigen: refs,
+  fuente: "Venta en visita", venta: true, creado: NOW.toISOString(), historial: [], ...x });
+const historica = (cita0: any = {}, hist: any[] = [entradaVieja("h1")], fichas: any[] = [fichaVieja("ap1", [refVieja("ap1")])]) => base({
+  agregados: [{ id: "c1", nombre: "QA Reg Ref Dos", telefono: "5552810003", venta: true, resultado: "demo_venta", historial: hist }],
+  distribucion: fichas,
+  appts: [cita({ nombre: "QA Reg Ref Dos", telefono: "5552810003", resultado: "demo_venta", monto: 1, producto: "Sistema de cocina",
+    _sincronizado: true, _clienteId: "c1", _clienteGrupo: "agregados", ...cita0 })],
+});
+const sinClave = (o: any, ...ks: string[]) => { const c = { ...o }; ks.forEach((k) => delete c[k]); return c; };
+
+test("histórica 1 · venta moderna (historial con apptId) sigue igual", () => {
+  const s = resultado(resultado(base(), "ap1", "demo_venta", VENTA, NOW), "ap1", "demo_no_venta", {}, T(10));
+  assert.equal(s.agregados[0].historial[0].apptId, "ap1");
+  assert.deepEqual(metricas(s), { demos: 1, ventas: 0, volumen: 0, cierre: 0 });
+});
+
+test("histórica 2 · historial sin apptId + ventasOrigen exacto: Venta 0, Volumen 0, Distribución reconciliada, historial sellado", () => {
+  const s = resultado(historica(), "ap1", "demo_no_venta", {}, T(10));
+  assert.deepEqual(metricas(s), { demos: 1, ventas: 0, volumen: 0, cierre: 0 });
+  assert.deepEqual(centroDeMando(s), { visitas: 1, demos: 1, ventas: 0, volumen: 0 });
+  assert.equal(refsVentaDeCita(s.distribucion, "ap1").length, 0);
+  assert.equal(s.distribucion[0].eliminado, true);
+  assert.equal(s.distribucion[0].eliminadoMotivo, "Venta corregida");
+  const h = s.agregados[0].historial;
+  assert.equal(h.length, 1);
+  assert.equal(h[0].apptId, "ap1", "queda sellada al formato nuevo");
+  assert.equal(h[0].cita_resultado, "demo_no_venta");
+  assert.equal(s.agregados[0].venta, false);
+});
+
+test("histórica 3 · sin _sincronizado (ni _cliente*): se reconoce por Distribución y se corrige igual", () => {
+  const s0 = historica();
+  s0.appts = [sinClave(s0.appts[0], "_sincronizado", "_clienteId", "_clienteGrupo")];
+  assert.equal(decidirVentaCitaV2(s0, s0.appts[0]), "reconciliar");
+  const s = resultado(s0, "ap1", "demo_no_venta", {}, T(10));
+  assert.deepEqual(metricas(s), { demos: 1, ventas: 0, volumen: 0, cierre: 0 });
+  assert.equal(refsVentaDeCita(s.distribucion, "ap1").length, 0);
+  assert.equal(s.agregados[0].historial[0].apptId, "ap1");
+  assert.equal(s.appts[0]._sincronizado, true, "la cita queda sellada: su venta vive en el historial");
+  assert.deepEqual([s.appts[0]._clienteGrupo, s.appts[0]._clienteId], ["agregados", "c1"]);
+});
+
+test("histórica 4 · la cita actual NO tiene producto pero ventasOrigen sí: se identifica por la referencia", () => {
+  const s0 = historica();
+  s0.appts = [sinClave(s0.appts[0], "producto")];
+  const s = resultado(s0, "ap1", "demo_no_venta", {}, T(10));
+  assert.equal(s.agregados[0].historial[0].apptId, "ap1");
+  assert.equal(s.agregados[0].historial[0].cita_resultado, "demo_no_venta");
+  assert.deepEqual(metricas(s), { demos: 1, ventas: 0, volumen: 0, cierre: 0 });
+});
+
+test("histórica 5 · la cita actual NO tiene monto pero ventasOrigen sí: mismo resultado", () => {
+  const s0 = historica();
+  s0.appts = [sinClave(s0.appts[0], "monto")];
+  const s = resultado(s0, "ap1", "demo_no_venta", {}, T(10));
+  assert.equal(s.agregados[0].historial[0].apptId, "ap1");
+  assert.deepEqual(metricas(s), { demos: 1, ventas: 0, volumen: 0, cierre: 0 });
+});
+
+test("histórica 6 · dos entradas igual de posibles: NO se toca ninguna (no se borra una venta al azar)", () => {
+  const s0 = historica({}, [entradaVieja("h1"), entradaVieja("h2")]);
+  const s = resultado(s0, "ap1", "demo_no_venta", {}, T(10));
+  assert.deepEqual(s.agregados[0].historial, s0.agregados[0].historial, "historial intacto");
+  assert.equal(s.agregados[0].venta, true);
+  const r = reconciliarVentaAgendaEnEstado({ ...s0, appts: s.appts }, s.appts[0], undefined, T(10), DIST);
+  assert.equal(r.info.cambio, "no_asociada");
+  // Distribución sí se reconcilia: la referencia exacta prueba que ESA cita produjo esa venta
+  assert.equal(refsVentaDeCita(s.distribucion, "ap1").length, 0);
+});
+
+test("histórica 7 · cliente con DOS ventas antiguas: corregir A deja B activa", () => {
+  const hist = [entradaVieja("hA"), entradaVieja("hB", { monto: 500, producto: "Extractor", notas: `${MARCA_VENTA_AGENDA} — Extractor` })];
+  const fichas = [fichaVieja("apA", [refVieja("apA"), refVieja("apB", { monto: 500, producto: "Extractor" })])];
+  let s = historica({ id: "apA" }, hist, fichas);
+  s.appts = [s.appts[0], cita({ id: "apB", fecha: "2026-10-27T13:00", nombre: "QA Reg Ref Dos", telefono: "5552810003", resultado: "demo_venta",
+    monto: 500, producto: "Extractor", _sincronizado: true, _clienteId: "c1", _clienteGrupo: "agregados" })];
+  s = resultado(s, "apA", "demo_no_venta", {}, T(10));
+  assert.deepEqual(s.agregados[0].historial.map((h: any) => [h.id, h.apptId, h.cita_resultado, h.monto]),
+    [["hA", "apA", "demo_no_venta", 0], ["hB", undefined, "demo_venta", 500]], "B no se toca ni se sella");
+  assert.equal(s.agregados[0].venta, true);
+  assert.deepEqual(fichasActivas(s)[0].ventasOrigen.map((v: any) => v.apptId), ["apB"]);
+  assert.deepEqual(metricas(s), { demos: 2, ventas: 1, volumen: 500, cierre: 50 });
+});
+
+test("histórica 8 · referido con sourceRefId reordenado: afecta al MISMO referido", () => {
+  const anf = { id: "anf1", anfitrion: "QA Anfitrión", referidos: [
+    { refId: "rA", nombre: "QA Reg Ref Uno", telefono: "5552810002", historial: [] },
+    { refId: "rB", nombre: "QA Reg Ref Dos", telefono: "5552810003", venta: true, resultado: "demo_venta", historial: [entradaVieja("h1")] },
+  ] };
+  const ficha = fichaVieja("ap1", [refVieja("ap1")], { sourceSection: "referidos", sourceRecordId: "anf1", sourceRefId: "rB", sourceRefIndex: 1 });
+  let s = base({ agregados: [], referidos: [anf], distribucion: [ficha],
+    appts: [cita({ nombre: "QA Reg Ref Dos", telefono: "5552810003", sourceSection: "referidos", sourceRecordId: "anf1", sourceRefId: "rB", sourceRefIndex: 1,
+      resultado: "demo_venta", monto: 1, producto: "Sistema de cocina" })] });            // histórica: sin _sincronizado
+  s = { ...s, referidos: [{ ...anf, referidos: [anf.referidos[1], anf.referidos[0]] }] };   // reordenado
+  s = resultado(s, "ap1", "demo_no_venta", {}, T(10));
+  const [b, a] = s.referidos[0].referidos;
+  assert.equal(b.refId, "rB"); assert.equal(b.venta, false);
+  assert.deepEqual([b.historial[0].apptId, b.historial[0].cita_resultado], ["ap1", "demo_no_venta"]);
+  assert.equal(a.refId, "rA"); assert.deepEqual(a.historial, []);
+  assert.deepEqual([s.appts[0]._clienteGrupo, s.appts[0]._clienteId], ["referidos", "anf1"]);
+  assert.deepEqual(metricas(s), { demos: 1, ventas: 0, volumen: 0, cierre: 0 });
+});
+
+test("histórica 9 · venta histórica → no venta → venta: UNA ficha, UNA venta activa, sin duplicados", () => {
+  const s0 = historica();
+  s0.appts = [sinClave(s0.appts[0], "_sincronizado", "_clienteId", "_clienteGrupo")];
+  let s = resultado(s0, "ap1", "demo_no_venta", {}, T(10));
+  s = resultado(s, "ap1", "demo_venta", VENTA, T(20));
+  assert.equal(s.distribucion.length, 1);
+  assert.equal(fichasActivas(s).length, 1);
+  assert.equal(refsActivas(s, "ap1").length, 1);
+  assert.equal(s.agregados[0].historial.length, 1, "la entrada sellada vuelve a venta; no se agrega otra");
+  assert.equal(s.agregados[0].historial[0].cita_resultado, "demo_venta");
+  assert.deepEqual(metricas(s), { demos: 1, ventas: 1, volumen: 1, cierre: 100 });
+  // y vuelve a corregirse como venta moderna
+  s = resultado(s, "ap1", "demo_no_venta", {}, T(30));
+  assert.deepEqual(metricas(s), { demos: 1, ventas: 0, volumen: 0, cierre: 0 });
+});
+
+test("histórica · sin evidencia de venta: reconciliar termina sin cambios", () => {
+  const s0 = base({ appts: [cita({ resultado: "demo_no_venta" })] });
+  assert.equal(decidirVentaCitaV2(s0, s0.appts[0]), "nada");
+  const s = resultado(s0, "ap1", "no_recibio", {}, T(10));
+  assert.deepEqual(s.agregados, s0.agregados);
+  assert.deepEqual(s.distribucion, []);
+});
+
+test("histórica 11 · supervisor: solo SET / papelera lógica, nunca borrado físico", () => {
+  const s0 = historica();
+  const s = resultado(s0, "ap1", "demo_no_venta", {}, T(10), SUP);
+  assert.equal(s.distribucion.length, s0.distribucion.length);
+  assert.equal(s.distribucion[0].eliminado, true);
+  assert.equal(s.distribucion[0].eliminadoPorUid, "sup1");
+  assert.equal(s.agregados.length, 1);
+  assert.equal(s.agregados[0].historial.length, 1);
 });
