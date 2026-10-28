@@ -125,7 +125,21 @@ export function registroTrabajado(r: any, restantes: any[] = lst(r?.ventasOrigen
 }
 export function reconciliarDistribucionPorVenta(distribucion: any[], a: any, now: Date = new Date(), autor: Autor = null) {
   const lista = lst(distribucion);
-  if (esVentaParaDistribucion(a)) return distribucionDesdeVenta(lista, a, now);
+  if (esVentaParaDistribucion(a)) {
+    // Venta restaurada (venta → no venta → venta): si la ficha auto-creada por ESTA venta quedó en
+    // papelera por "Venta corregida" y no hay otra ficha activa del cliente, se REVIVE la misma
+    // (mismo id dv_<cita>) en vez de crear una segunda con el mismo id.
+    const enPapelera = lista.find((r: any) => r && r.eliminado && r.eliminadoMotivo === "Venta corregida"
+      && r.createdFrom === "venta_distribucion" && String(r.id) === idDistribucionDeVenta(a));
+    if (enPapelera && !buscarEnDistribucionConMotivo(lista, a)) {
+      const { eliminado, eliminadoMotivo, eliminadoAt, eliminadoPorUid, eliminadoPorNombre, ...resto } = enPapelera;
+      const revivido: any = { ...resto, ventasOrigen: [...lst(resto.ventasOrigen).filter((v: any) => String(v?.apptId) !== String(a.id)), refVenta(a)],
+        ventaOrigenApptId: a.id, restauradoPorVentaAt: now.toISOString() };
+      if (String(resto.actualizado || "") === String(eliminadoAt || "")) delete revivido.actualizado;   // solo lo tocó la corrección
+      return { lista: lista.map((r: any) => (r === enPapelera ? revivido : r)), accion: "actualizado" as const, id: revivido.id, motivo: "misma_venta" as MotivoVinculo };
+    }
+    return distribucionDesdeVenta(lista, a, now);
+  }
 
   let accion: "sin_cambios" | "desvinculado" | "papelera" = "sin_cambios";
   let id: any = null;
