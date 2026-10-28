@@ -27,7 +27,7 @@ import { sellarReferidos, transicionObsequio, relevoObsequioStaff, progresoObseq
 import { esStaffShared } from "./data/schema";
 import { coincideBusquedaV2, paginar as paginarDB, candidatoDuplicado as candidatoDuplicadoDB, candidatosDuplicadoAnfitrion, accionesRegistroV2, ventaDesdeRegistro, camposVenta, clavesReferidos, correccionDesdeRegistro, ventaVisibleDistribucion, ultimaVentaOrigen, seccionDeTipo, camposResultadoFisico, identidadTrazada } from "./services/databaseV2";
 import { reconciliarDistribucionPorVenta, aplicarVentaEnEstado, TEXTO_MOTIVO_VINCULO } from "./services/ventaDistribucionV2";
-import { accionTrasActualizarCita, registroConVentaDeCita, reconciliarVentaAgendaEnEstado } from "./services/ventaAgendaV2";
+import { accionTrasActualizarCita, registroConVentaDeCita, reconciliarVentaAgendaEnEstado, decidirVentaCitaV2 } from "./services/ventaAgendaV2";
 import { CitaAccionesV2, ReprogramarEnVisitaV2, RESULTADOS_V2_BOTONES, ClientePickerV2, AvisoDuplicadoV2, CalendariosV2 } from "./components/agenda/AgendaV2Extras";
 import { CallCenterV2 } from "./components/calls/CallCenterV2";
 import { RutasEquipoV2 } from "./components/rutas/RutasEquipoV2";
@@ -8938,9 +8938,10 @@ function AppRoot() {
     return { data:allData[sec], setData:fn=>setSection(sec,fn), type:base[0], title:base[1], onCallLog, role, allData, agente:agenteActivo, notify, setAppts, rolActivo:rolUsuario,
       ...(sec==="distribucion"?{ cobranzaClientes:(state.cobranza||{}).clientesData||{} }:{}) };
   };
-  const sincronizarVentaAgenda=(appt)=>{
+  // `aplicar` (opcional, v2): recibe el MISMO paso de siempre para ejecutarlo dentro de otra transición.
+  const sincronizarVentaAgenda=(appt, aplicar=setState)=>{
     if(!appt || appt._sincronizado) return;
-    setState(s0=>{ const out=(s=>{
+    aplicar(s0=>{ const out=(s=>{
       const tel=soloNum(appt.telefono||"");
       const monto=Number(appt.monto)||0;
       const histEntry={...makeHistorialEntry({ tipo:"cita", cita_resultado:"demo_venta", notas:`💰 Venta agendada en Agenda${appt.producto?` — ${appt.producto}`:""}`, agente:appt.agente||"", monto, producto:appt.producto||"", cartucho_meses:appt.cartucho_meses||0 }), ...(ACCESS_V2?{ apptId:appt.id }:{})};   // v2: liga la venta a ESTA cita
@@ -8980,14 +8981,25 @@ function AppRoot() {
       return {...s, ...patch};
     })(s0); return conDistribucionV2(out, appt); });   // v2: + Distribución (legacy: sin cambios)
   };
-  // v2 · Corrección / restauración de una venta de Agenda ya sincronizada (Demo / venta ↔ otro resultado):
-  // registro de origen (historial de ESA cita) + Distribución en UNA transición de estado. Solo staff.
+  // v2: el mismo paso de sincronización, aplicado a un estado dado (sin setState propio).
+  const ventaInicialEnEstado=(s0, appt)=>{ let r=s0; sincronizarVentaAgenda(appt, paso=>{ r=paso(s0); }); return r; };
+  // v2 · Cita actualizada en la Agenda (solo citas; servicios siguen su flujo). Decide con el estado
+  // completo (decidirVentaCitaV2): venta nueva → la sincronización de siempre; cita con evidencia de
+  // venta (_sincronizado, ventasOrigen[].apptId en Distribución o historial sellado, incluidas las
+  // ventas HISTÓRICAS) → registro de origen + Distribución en UNA transición; sin evidencia → nada.
   const corregirVentaAgenda=(appt)=>{
-    if(!ACCESS_V2 || !v2User || !canRecordVisitResult(v2User.role) || !appt) return;
+    if(!appt) return;
+    if(!ACCESS_V2 || !v2User || !canRecordVisitResult(v2User.role)){                    // no registra resultados:
+      if(appt.resultado==="demo_venta" && !appt._sincronizado) sincronizarVentaAgenda(appt);   // igual que antes
+      return;
+    }
     setState(s=>{
       const actual=(s.appts||[]).find(a=>String(a.id)===String(appt.id));   // ya trazada por setAppts
-      if(!actual || !actual._sincronizado) return s;
-      const r=reconciliarVentaAgendaEnEstado(s, actual, sourceRecordForAppt(s, actual), new Date(), { uid:v2User.uid, nombre:v2User.nombre });
+      if(!actual) return s;
+      const d=decidirVentaCitaV2(s, actual);
+      if(d==="venta_inicial") return ventaInicialEnEstado(s, actual);
+      if(d!=="reconciliar") return s;
+      const r=reconciliarVentaAgendaEnEstado(s, actual, undefined, new Date(), { uid:v2User.uid, nombre:v2User.nombre });
       return conDistribucionV2(r.state, actual);
     });
   };
