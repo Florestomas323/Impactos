@@ -39,6 +39,6 @@ jobs:
       - name: Preparar cuenta QA (qa@impactos.test · distribuidor)
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
-        run: node scripts/qa-account.mjs
+        run: node scripts/qa-account.js
       - if: always()
         run: rm -f "$RUNNER_TEMP/sa.json"
