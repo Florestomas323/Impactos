@@ -15,3 +15,15 @@ export function firebaseConfigOverride(): Record<string, string> | null {
   if (!env.VITE_FIREBASE_CONFIG) return null;
   try { return JSON.parse(env.VITE_FIREBASE_CONFIG); } catch { return null; }
 }
+
+// ═══ ACCESO QA (correo + contraseña) — SOLO PROYECTO DE PRUEBA ═════════════
+// Se enciende con VITE_QA_LOGIN=true, que solo existe en el Vercel de prueba.
+// Triple candado: aunque alguien pusiera la variable en producción, el
+// formulario NO aparece si la app no está en modo v2 o si el Firebase activo
+// es el de producción (o el de siempre, sin override).
+const FIREBASE_PROD_PROJECT = "actividad-royal-prestige";
+export const QA_LOGIN: boolean = (() => {
+  if (env.VITE_QA_LOGIN !== "true" || !ACCESS_V2) return false;
+  const cfg = firebaseConfigOverride();
+  return !!cfg?.projectId && cfg.projectId !== FIREBASE_PROD_PROJECT;
+})();
