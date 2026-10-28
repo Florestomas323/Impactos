@@ -10,15 +10,21 @@
 //   Otras ventas del mismo cliente no se tocan; venta:false solo si no queda ninguna vigente.
 // Distribución se reconcilia aparte con reconciliarDistribucionPorVenta (ventaDistribucionV2).
 //
-// Compatibilidad (sin migrar): las entradas creadas ANTES de este cambio no tienen apptId.
-// Fallback estricto: solo se asocia una entrada sin apptId si es la ÚNICA del registro que
-// cumple todo: tipo "cita", venta vigente, nota de Agenda ("💰 Venta agendada en Agenda"),
-// mismo monto y mismo producto que la cita. Si hay 0 o más de 1 candidata, el historial NO se
-// toca (cambio "no_asociada"): se prefiere no borrar una venta legítima. Al asociarla queda
-// sellada con apptId, así las siguientes correcciones ya no dependen del fallback.
+// Compatibilidad con ventas HISTÓRICAS (sin migración; self-heal al tocarlas):
+//   Evidencia primaria: Distribución ya guardaba ventasOrigen[].apptId desde antes de este cambio.
+//   Una cita con esa referencia YA produjo una venta, aunque le falte _sincronizado o su historial
+//   no tenga apptId. Orden para encontrar la entrada de historial de ESA cita:
+//     1) historial[].apptId === cita.id                                   (ruta moderna)
+//     2) entradas sin apptId, tipo "cita", demo_venta/venta, comparadas con la referencia de
+//        Distribución (monto/producto de la venta ORIGINAL; si no hay referencia única, con la
+//        cita y exigiendo la nota "💰 Venta agendada en Agenda"). Si quedan varias, se prefieren
+//        las que tienen esa nota.
+//   Solo se usa si queda UNA candidata: se sella con apptId (y la cita con _sincronizado) y desde
+//   ahí se comporta como venta moderna. 0 o más de 1 → "no_asociada": no se toca el historial
+//   (no se borra una venta al azar); Distribución igual se reconcilia por la referencia exacta.
 import { esVentaParaDistribucion } from "./ventaDistribucionV2";
 import { esServicio } from "./serviceV2";
-import { isCancelled } from "./agendaV2";
+import { isCancelled, sourceRecordForAppt } from "./agendaV2";
 
 const lst = (v: any): any[] => (Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : []);
 const vacio = (v: any) => v === undefined || v === null || String(v).trim() === "";
@@ -31,12 +37,24 @@ const ETIQUETA: Record<string, string> = {
 type Autor = { uid?: string; nombre?: string } | null | undefined;
 
 // ── Qué hacer después de actualizar una cita en la Agenda ───────────────────
-// Legacy (v2 = false): exactamente la condición de siempre.
+// Legacy (v2 = false) y servicios: exactamente la condición de siempre.
+// v2 · citas: App decide con el estado completo (decidirVentaCitaV2), así una venta histórica
+// sin _sincronizado también se reconoce. Sin evidencia de venta, App termina sin cambios.
 export function accionTrasActualizarCita(u: any, v2: boolean): "sincronizar" | "reconciliar" | null {
   if (!u) return null;
+  if (v2 && !esServicio(u)) return "reconciliar";
   if (u.resultado === "demo_venta" && !u._sincronizado) return "sincronizar";
-  if (v2 && u._sincronizado && !esServicio(u)) return "reconciliar";
   return null;
+}
+
+// Referencias de venta de ESTA cita en fichas ACTIVAS de Distribución (evidencia histórica).
+export function refsVentaDeCita(distribucion: any, apptId: any) {
+  const out: { ficha: any; ref: any }[] = [];
+  lst(distribucion).forEach((f: any) => {
+    if (!f || f.eliminado) return;
+    lst(f.ventasOrigen).forEach((v: any) => { if (v && String(v.apptId) === String(apptId)) out.push({ ficha: f, ref: v }); });
+  });
+  return out;
 }
 
 // ── Venta inicial (la usa sincronizarVentaAgenda en v2) ──────────────────────
@@ -54,24 +72,31 @@ export function registroConVentaDeCita(r: any, appt: any, entrada: any, opts: { 
 }
 
 // ── Entrada de historial de ESA cita ─────────────────────────────────────────
-export function entradaDeCita(historial: any, appt: any): { idx: number; via: "apptId" | "legacy_unico" } | null {
+// `ref`: la referencia ÚNICA de Distribución para esta cita (ventasOrigen[].apptId === cita.id), si existe.
+export function entradaDeCita(historial: any, appt: any, ref: any = null): { idx: number; via: "apptId" | "historica_distribucion" | "legacy_unico" } | null {
   const hist = lst(historial);
   const porId = hist.findIndex((h: any) => h && !vacio(h.apptId) && String(h.apptId) === String(appt?.id));
   if (porId >= 0) return { idx: porId, via: "apptId" };
-  const monto = Number(appt?.monto) || 0, producto = String(appt?.producto || "");
-  const candidatas = hist
+  const marca = (h: any) => String(h.notas || "").startsWith(MARCA_VENTA_AGENDA);
+  // Valores de la venta ORIGINAL: la referencia manda (se guardó al vender; monto/producto solo si existían).
+  // Sin referencia: los de la cita, y solo los que la cita tenga.
+  const montoEsp = ref ? Number(ref.monto) || 0 : vacio(appt?.monto) ? null : Number(appt.monto) || 0;
+  const prodEsp = ref ? String(ref.producto || "") : vacio(appt?.producto) ? null : String(appt.producto);
+  let candidatas = hist
     .map((h: any, i: number) => ({ h, i }))
-    .filter(({ h }) => h && vacio(h.apptId) && h.tipo === "cita" && esVentaHist(h.cita_resultado)
-      && String(h.notas || "").startsWith(MARCA_VENTA_AGENDA)
-      && (Number(h.monto) || 0) === monto && String(h.producto || "") === producto);
-  return candidatas.length === 1 ? { idx: candidatas[0].i, via: "legacy_unico" } : null;
+    .filter(({ h }) => h && vacio(h.apptId) && h.tipo === "cita" && (h.cita_resultado === "demo_venta" || h.cita_resultado === "venta")
+      && (montoEsp === null || (Number(h.monto) || 0) === montoEsp)
+      && (prodEsp === null || String(h.producto || "") === prodEsp)
+      && (ref ? true : marca(h)));                              // sin evidencia de Distribución: exige la nota de Agenda
+  if (candidatas.length > 1) candidatas = candidatas.filter(({ h }) => marca(h));
+  return candidatas.length === 1 ? { idx: candidatas[0].i, via: ref ? "historica_distribucion" : "legacy_unico" } : null;
 }
 
 // ── Reconcilia el registro de origen con el resultado ACTUAL de la cita ─────
 export type CambioRegistro = "corregida" | "restaurada" | "actualizada" | "sin_cambios" | "no_asociada";
-export function reconciliarRegistroPorCita(r: any, appt: any, now: Date = new Date(), autor: Autor = null, opts: { cartucho?: boolean } = {}) {
+export function reconciliarRegistroPorCita(r: any, appt: any, now: Date = new Date(), autor: Autor = null, opts: { cartucho?: boolean; ref?: any } = {}) {
   const hist = lst(r?.historial);
-  const hit = entradaDeCita(hist, appt);
+  const hit = entradaDeCita(hist, appt, opts.ref || null);
   if (!r || !hit) return { registro: r, cambio: "no_asociada" as CambioRegistro, via: null };
   const h = hist[hit.idx];
   const eraVenta = esVentaHist(h.cita_resultado);
@@ -155,13 +180,38 @@ export function mapearRegistro(state: any, loc: { section: string; id: string; r
 }
 
 // Paso completo sobre el estado (sin Distribución): registro de origen de ESA cita.
-export function reconciliarVentaAgendaEnEstado(state: any, appt: any, src: any, now: Date = new Date(), autor: Autor = null) {
-  const loc = ubicarRegistroDeCita(appt, src);
+// Si la entrada se asocia y la cita no estaba sincronizada (venta histórica), la cita queda sellada
+// (_sincronizado + _cliente*) igual que una venta moderna: su venta vive en el historial, no se cuenta doble.
+export function reconciliarVentaAgendaEnEstado(state: any, appt: any, src: any = undefined, now: Date = new Date(), autor: Autor = null) {
+  const refs = refsVentaDeCita(state?.distribucion, appt?.id);
+  const ref = refs.length === 1 ? refs[0].ref : null;
+  const fuente = src !== undefined ? src : sourceRecordForAppt(state, appt);
+  // Sin origen resoluble desde la cita: el de la ficha de Distribución (guarda sourceSection/Id/RefId de la venta).
+  const srcFinal = fuente || (refs.length === 1 && !vacio(refs[0].ficha.sourceRecordId) ? sourceRecordForAppt(state, refs[0].ficha) : null);
+  const loc = ubicarRegistroDeCita(appt, srcFinal);
   let info: { cambio: CambioRegistro; via: any } = { cambio: "no_asociada", via: null };
   const out = mapearRegistro(state, loc, (r) => {
-    const x = reconciliarRegistroPorCita(r, appt, now, autor, { cartucho: loc?.section !== "referidos" });
+    const x = reconciliarRegistroPorCita(r, appt, now, autor, { cartucho: loc?.section !== "referidos", ref });
     info = { cambio: x.cambio, via: x.via };
     return x.cambio === "sin_cambios" || x.cambio === "no_asociada" ? r : x.registro;
   });
-  return { state: info.cambio === "sin_cambios" || info.cambio === "no_asociada" ? state : out, info, loc };
+  if (info.cambio === "sin_cambios" || info.cambio === "no_asociada") return { state, info, loc };
+  const sellar = !appt._sincronizado && loc;
+  const appts = sellar ? lst(out.appts).map((a: any) => (a && String(a.id) === String(appt.id) ? { ...a, _sincronizado: true, _clienteId: loc!.id, _clienteGrupo: loc!.section } : a)) : out.appts;
+  return { state: sellar ? { ...out, appts } : out, info, loc };
+}
+
+// ── v2: ¿qué hacer con ESTA cita después de actualizarla? (App, dentro de setState) ──
+//   "reconciliar"   → tiene evidencia de venta: _sincronizado, o una referencia exacta en
+//                     Distribución (ventasOrigen[].apptId), o una entrada de historial con su apptId.
+//   "venta_inicial" → sin evidencia y ahora es venta: la sincronización de siempre.
+//   "nada"          → sin evidencia y sin venta: nada que reconciliar.
+export function decidirVentaCitaV2(state: any, appt: any): "reconciliar" | "venta_inicial" | "nada" {
+  if (!appt || esServicio(appt)) return "nada";
+  if (appt._sincronizado || refsVentaDeCita(state?.distribucion, appt.id).length > 0) return "reconciliar";
+  const loc = ubicarRegistroDeCita(appt, sourceRecordForAppt(state, appt));
+  let sellada = false;
+  mapearRegistro(state, loc, (r) => { sellada = lst(r?.historial).some((h: any) => h && String(h.apptId ?? "") === String(appt.id)); return r; });
+  if (sellada) return "reconciliar";
+  return appt.resultado === "demo_venta" ? "venta_inicial" : "nada";
 }
