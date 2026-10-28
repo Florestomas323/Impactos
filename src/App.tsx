@@ -5,7 +5,8 @@ import { RP, SERIF, SANS } from "./theme";
 import { inpLight, PrimaryBtn, Modal, Field } from "./components/primitives";
 import { ROLES_APP, normalizarRol, PERMISOS_ROL } from "./auth/legacyPermissions";
 // ── Acceso v2 (apagado en producción hasta la Entrega 4; ver src/config/flags.ts) ──
-import { ACCESS_V2, APP_ID, firebaseConfigOverride } from "./config/flags";
+import { ACCESS_V2, APP_ID, firebaseConfigOverride, QA_LOGIN } from "./config/flags";
+import { QaLoginForm } from "./components/users/QaLoginForm";
 import { canDo, canTab, setViewer } from "./auth/access";
 import { ROLE_LABEL, ROLE_SPECIALTY } from "./auth/roles";
 import { resolveAccess, watchProfile, touchLastActive, purgeLocalData } from "./auth/userAccess";
@@ -8636,7 +8637,7 @@ function ConfigSection({ agenteActivo, onCerrarSesion, rolActivo, emailActivo, c
 
 // ─── PANTALLA DE LOGIN ────────────────────────────────────────
 // ─── LOGIN CON FIREBASE (correo + clave) ──────────────────────
-function FirebaseLoginScreen({ onGoogle, error, busy }) {
+function FirebaseLoginScreen({ onGoogle, error, busy, onQaLogin = null }) {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden bg-[#F8FAFC]">
       <div aria-hidden className="pointer-events-none absolute -top-40 left-1/2 -translate-x-1/2 w-[640px] h-[640px] rounded-full opacity-[0.5]"
@@ -8665,6 +8666,8 @@ function FirebaseLoginScreen({ onGoogle, error, busy }) {
             </svg>
             {busy ? "Conectando…" : "Continuar con Google"}
           </button>
+
+          {QA_LOGIN && onQaLogin && <QaLoginForm onSubmit={onQaLogin} busy={busy} />}
 
           <div className="mt-5 pt-4 border-t border-white/10 text-[11px] text-[#717680] text-center leading-relaxed">
             Solo las cuentas autorizadas por el administrador pueden entrar.
@@ -8794,6 +8797,18 @@ function AppRoot() {
       if(c.includes("popup-closed") || c.includes("cancelled-popup")) setLoginError("Inicio de sesión cancelado.");
       else if(c.includes("popup-blocked")) setLoginError("El navegador bloqueó la ventana de Google. Permite ventanas emergentes e inténtalo otra vez.");
       else setLoginError("No se pudo iniciar sesión con Google. Inténtalo de nuevo.");
+    } finally { setLoginBusy(false); }
+  };
+  // Acceso QA (solo prueba, QA_LOGIN): correo + contraseña de Firebase Auth.
+  // Al entrar, onAuthStateChanged → resolveAccess, igual que con Google.
+  const iniciarSesionQA=async(correo,clave)=>{
+    if(!QA_LOGIN) return;
+    setLoginError(""); setLoginBusy(true);
+    try {
+      const auth=await getAuth();
+      await auth.signInWithEmailAndPassword(correo,clave);
+    } catch(e){
+      setLoginError(`${e?.code||"sin código"} — ${e?.message||String(e)}`);
     } finally { setLoginBusy(false); }
   };
   const cerrarSesion=async()=>{ try { const auth=await getAuth(); await auth.signOut(); } catch {} };
@@ -9177,7 +9192,7 @@ function AppRoot() {
   }
   // Sin sesión → pantalla de login de Firebase
   if(!authUser){
-    return <FirebaseLoginScreen onGoogle={iniciarSesionGoogle} error={loginError} busy={loginBusy} />;
+    return <FirebaseLoginScreen onGoogle={iniciarSesionGoogle} error={loginError} busy={loginBusy} onQaLogin={QA_LOGIN ? iniciarSesionQA : null} />;
   }
   // Con sesión de Firebase: si YA tenemos una copia local (IndexedDB/caché),
   // pintamos el shell al instante con esos datos y dejamos que Firebase termine
